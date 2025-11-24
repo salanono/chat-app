@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+
+# Environment
+.env
+
+# Docker volumes
+pgdata/
+
+# Mac
+.DS_Store
