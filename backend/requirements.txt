@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-socketio[asyncio_server]
+SQLAlchemy>=2.0
+asyncpg
+psycopg2-binary
+pydantic
+python-dotenv
