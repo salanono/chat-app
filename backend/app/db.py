@@ -1,13 +1,20 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy.orm import declarative_base
+# backend/app/db.py
 import os
+from dotenv import load_dotenv
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.orm import declarative_base
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+load_dotenv()
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql+asyncpg://chatuser:chatpass@db:5432/chatdb",  # docker-compose前提
+)
 
 engine = create_async_engine(
     DATABASE_URL,
-    echo=True,
-    future=True
+    echo=True,          # ログうるさかったら False にしてOK
+    future=True,
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -19,6 +26,7 @@ AsyncSessionLocal = async_sessionmaker(
 
 Base = declarative_base()
 
-async def get_db():
+
+async def get_db() -> AsyncSession:
     async with AsyncSessionLocal() as session:
         yield session

@@ -1,15 +1,21 @@
+# backend/app/main.py
 from fastapi import FastAPI
-from .socket import app as socket_app
-from .api.routes import router
 
-from .db import engine, Base
-import asyncio
+from .api.routes import router as api_router
+from .db import Base, engine
 
-app = FastAPI()
+app = FastAPI(title="Chat Support Backend")
 
-app.include_router(router)
-app.mount("/ws", socket_app)
+app.include_router(api_router)
+
 
 @app.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+async def on_startup():
+    # 起動時にテーブル自動作成（マイグレーション導入までの暫定）
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
