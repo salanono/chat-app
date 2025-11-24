@@ -6,6 +6,7 @@ import socketio
 from .api.routes import router as api_router
 from .db import Base, engine
 from .socket import sio  # ← さっきの AsyncServer を import
+from .auth import ensure_default_admin
 
 # ---- FastAPI 本体（REST 用） ----
 fastapi_app = FastAPI(title="Chat Support Backend")
@@ -35,7 +36,7 @@ async def on_startup():
     # 起動時にテーブル自動作成
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
+    await ensure_default_admin()
 
 # ---- FastAPI + Socket.IO を合体させた ASGI アプリ ----
 # socketio_path="ws/socket.io" → クライアント側は path: "/ws/socket.io"

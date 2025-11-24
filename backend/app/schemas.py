@@ -4,6 +4,13 @@ from datetime import datetime
 from typing import Optional
 import uuid
 
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 # ---- Sessions ----
 class SessionCreate(BaseModel):

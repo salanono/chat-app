@@ -4,6 +4,7 @@ import { io } from "socket.io-client";
 
 const API_BASE = "http://localhost:8000";
 
+// --- チャット用状態 ---
 const sessions = ref([]);
 const selectedSessionId = ref(null);
 const messages = ref([]);
@@ -12,19 +13,87 @@ const inputText = ref("");
 const socket = ref(null);
 const isConnected = ref(false);
 
-// ---- セッション一覧取得 ----
+// --- ログイン状態 ---
+const TOKEN_KEY = "chat_admin_token";
+
+const email = ref("admin@example.com");
+const password = ref("password");
+const token = ref(localStorage.getItem(TOKEN_KEY) || "");
+const isLoggedIn = ref(!!token.value);
+const loginError = ref("");
+
+// 共通ヘッダー（認証付き）
+const authHeaders = () => {
+  const headers = {};
+  if (token.value) {
+    headers["Authorization"] = `Bearer ${token.value}`;
+  }
+  return headers;
+};
+
+// --------- 認証処理 ---------
+const login = async () => {
+  loginError.value = "";
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: email.value,
+        password: password.value,
+      }),
+    });
+
+    if (!res.ok) {
+      loginError.value = "メールアドレスまたはパスワードが違います";
+      return;
+    }
+
+    const data = await res.json();
+    token.value = data.access_token;
+    localStorage.setItem(TOKEN_KEY, token.value);
+    isLoggedIn.value = true;
+
+    // ログインに成功したらセッション一覧取得
+    await fetchSessions();
+  } catch (e) {
+    console.error(e);
+    loginError.value = "ログインに失敗しました";
+  }
+};
+
+// --------- REST API ---------
 const fetchSessions = async () => {
-  const res = await fetch(`${API_BASE}/api/sessions`);
-  sessions.value = await res.json();
+  if (!isLoggedIn.value || !token.value) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/sessions`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) {
+      console.error("failed to fetch sessions", res.status);
+      return;
+    }
+    sessions.value = await res.json();
+  } catch (e) {
+    console.error("failed to fetch sessions", e);
+  }
 };
 
-// ---- メッセージ一覧取得 ----
 const loadMessages = async (sessionId) => {
-  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/messages`);
-  messages.value = await res.json();
+  try {
+    const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/messages`);
+    if (!res.ok) {
+      console.error("failed to fetch messages", res.status);
+      return;
+    }
+    messages.value = await res.json();
+  } catch (e) {
+    console.error("failed to fetch messages", e);
+  }
 };
 
-// ---- セッション選択 ----
+// --------- UI 操作 ---------
 const selectSession = async (sessionId) => {
   selectedSessionId.value = sessionId;
   await loadMessages(sessionId);
@@ -37,7 +106,7 @@ const selectSession = async (sessionId) => {
   }
 };
 
-// ---- Socket.IO 接続 ----
+// --------- Socket.IO ---------
 const connectSocket = () => {
   socket.value = io("http://localhost:8000", {
     path: "/ws/socket.io",
@@ -68,7 +137,6 @@ const connectSocket = () => {
   });
 };
 
-// ---- メッセージ送信（オペレーター側）----
 const sendMessage = () => {
   const text = inputText.value.trim();
   if (!text || !socket.value || !isConnected.value || !selectedSessionId.value)
@@ -78,13 +146,14 @@ const sendMessage = () => {
     session_id: selectedSessionId.value,
     content: text,
   });
-
   inputText.value = "";
 };
 
 onMounted(async () => {
-  await fetchSessions();
   connectSocket();
+  if (isLoggedIn.value) {
+    await fetchSessions();
+  }
 });
 
 onBeforeUnmount(() => {
@@ -94,68 +163,95 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="admin">
-    <aside class="admin__sidebar">
-      <h2 class="admin__sidebar-title">セッション一覧</h2>
-      <ul class="admin__session-list">
-        <li
-          v-for="s in sessions"
-          :key="s.id"
-          class="admin__session-item"
-          :class="{ 'admin__session-item--active': s.id === selectedSessionId }"
-          @click="selectSession(s.id)"
-        >
-          <div class="admin__session-main">
-            <span class="admin__session-visitor">
-              {{ s.visitor_identifier }}
-            </span>
-          </div>
-          <small class="admin__session-status">
-            {{ s.status }} / 最終更新:
-            {{ new Date(s.last_active_at).toLocaleString() }}
-          </small>
-        </li>
-      </ul>
-    </aside>
-
-    <main class="admin__main">
-      <div v-if="!selectedSessionId" class="admin__placeholder">
-        左のリストからセッションを選択してください
+    <!-- ログイン前 -->
+    <div v-if="!isLoggedIn" class="admin__login">
+      <div class="admin__login-card">
+        <h2>管理者ログイン</h2>
+        <div class="admin__login-form">
+          <label>
+            メールアドレス
+            <input v-model="email" type="email" />
+          </label>
+          <label>
+            パスワード
+            <input v-model="password" type="password" />
+          </label>
+          <button @click="login">ログイン</button>
+          <p v-if="loginError" class="admin__login-error">{{ loginError }}</p>
+          <p class="admin__hint">
+            デフォルト: <code>admin@example.com</code> / <code>password</code>
+          </p>
+        </div>
       </div>
+    </div>
 
-      <div v-else class="admin__chat">
-        <header class="admin__chat-header">
-          <h2>Session: {{ selectedSessionId }}</h2>
-        </header>
-
-        <section class="admin__messages">
-          <div
-            v-for="m in messages"
-            :key="m.id"
-            class="msg"
-            :class="m.sender_type === 'operator' ? 'msg--me' : 'msg--other'"
+    <!-- ログイン後の管理画面 -->
+    <template v-else>
+      <aside class="admin__sidebar">
+        <h2 class="admin__sidebar-title">セッション一覧</h2>
+        <ul class="admin__session-list">
+          <li
+            v-for="s in sessions"
+            :key="s.id"
+            class="admin__session-item"
+            :class="{
+              'admin__session-item--active': s.id === selectedSessionId,
+            }"
+            @click="selectSession(s.id)"
           >
-            <div class="msg__bubble">
-              <p>{{ m.content }}</p>
+            <div class="admin__session-main">
+              <span class="admin__session-visitor">
+                {{ s.visitor_identifier }}
+              </span>
             </div>
-          </div>
-        </section>
+            <small class="admin__session-status">
+              {{ s.status }} / 最終更新:
+              {{ new Date(s.last_active_at).toLocaleString() }}
+            </small>
+          </li>
+        </ul>
+      </aside>
 
-        <footer class="admin__footer">
-          <input
-            v-model="inputText"
-            type="text"
-            placeholder="メッセージを入力..."
-            @keyup.enter="sendMessage"
-          />
-          <button
-            @click="sendMessage"
-            :disabled="!inputText.trim() || !isConnected"
-          >
-            送信
-          </button>
-        </footer>
-      </div>
-    </main>
+      <main class="admin__main">
+        <div v-if="!selectedSessionId" class="admin__placeholder">
+          左のリストからセッションを選択してください
+        </div>
+
+        <div v-else class="admin__chat">
+          <header class="admin__chat-header">
+            <h2>Session: {{ selectedSessionId }}</h2>
+          </header>
+
+          <section class="admin__messages">
+            <div
+              v-for="m in messages"
+              :key="m.id"
+              class="msg"
+              :class="m.sender_type === 'operator' ? 'msg--me' : 'msg--other'"
+            >
+              <div class="msg__bubble">
+                <p>{{ m.content }}</p>
+              </div>
+            </div>
+          </section>
+
+          <footer class="admin__footer">
+            <input
+              v-model="inputText"
+              type="text"
+              placeholder="メッセージを入力..."
+              @keyup.enter="sendMessage"
+            />
+            <button
+              @click="sendMessage"
+              :disabled="!inputText.trim() || !isConnected"
+            >
+              送信
+            </button>
+          </footer>
+        </div>
+      </main>
+    </template>
   </div>
 </template>
 
@@ -172,6 +268,85 @@ onBeforeUnmount(() => {
   box-shadow: 0 18px 35px rgba(0, 0, 0, 0.45);
 }
 
+/* --- ログイン画面 --- */
+.admin__login {
+  margin: auto;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.admin__login-card {
+  background: #020617;
+  border-radius: 16px;
+  border: 1px solid #1f2937;
+  padding: 24px 28px;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: 0 18px 35px rgba(0, 0, 0, 0.45);
+}
+
+.admin__login-card h2 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.admin__login-form label {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.admin__login-form input {
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #374151;
+  background: #020617;
+  color: #e5e7eb;
+  font-size: 13px;
+}
+
+.admin__login-form input:focus {
+  outline: none;
+  border-color: #22c55e;
+}
+
+.admin__login-form button {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: none;
+  background: #22c55e;
+  color: #022c22;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.admin__login-error {
+  margin-top: 8px;
+  color: #f97373;
+  font-size: 12px;
+}
+
+.admin__hint {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.admin__hint code {
+  background: #020617;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+/* --- 管理画面 --- */
 .admin__sidebar {
   width: 260px;
   border-right: 1px solid #1f2937;

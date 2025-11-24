@@ -1,5 +1,4 @@
-# backend/app/api/routes.py
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
@@ -7,17 +6,38 @@ import uuid
 
 from ..db import get_db
 from .. import models, schemas
+from ..auth import (
+    authenticate_user,
+    create_access_token,
+    # get_current_user  ← いったん使わないのでコメントアウトでもOK
+)
 
 router = APIRouter(prefix="/api")
 
 
-# ---- セッション作成（訪問者側）----
+# ---------- 認証系 ----------
+
+@router.post("/auth/login", response_model=schemas.Token)
+async def login(payload: schemas.LoginRequest, db: AsyncSession = Depends(get_db)):
+    user = await authenticate_user(payload.email, payload.password, db)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect email or password",
+        )
+
+    token = create_access_token({"sub": user.email})
+    return {"access_token": token, "token_type": "bearer"}
+
+
+# ---------- セッション系 ----------
+
+# 訪問者側：セッション作成 or 既存取得（認証なし）
 @router.post("/sessions", response_model=schemas.SessionSummary)
 async def create_or_get_session(
     payload: schemas.SessionCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    # すでに open なセッションがあればそれを返す
     q = (
         select(models.Session)
         .where(
@@ -31,7 +51,6 @@ async def create_or_get_session(
     if existing:
         return existing
 
-    # なければ新規作成
     sess = models.Session(
         visitor_identifier=payload.visitor_identifier,
         visitor_name=payload.visitor_name,
@@ -43,16 +62,19 @@ async def create_or_get_session(
     return sess
 
 
-# ---- セッション一覧（管理画面用）----
+# 管理画面：セッション一覧（いったん認証なしにする）
 @router.get("/sessions", response_model=list[schemas.SessionSummary])
-async def list_sessions(db: AsyncSession = Depends(get_db)):
+async def list_sessions(
+    db: AsyncSession = Depends(get_db),
+    # current_user: models.User = Depends(get_current_user),  ← 一旦外す
+):
     q = select(models.Session).order_by(models.Session.last_active_at.desc())
     result = await db.execute(q)
     sessions = result.scalars().all()
     return sessions
 
 
-# ---- メッセージ一覧 ----
+# 誰でも：メッセージ一覧（認証なし）
 @router.get("/sessions/{session_id}/messages", response_model=list[schemas.MessageRead])
 async def get_messages(
     session_id: uuid.UUID,
@@ -68,14 +90,14 @@ async def get_messages(
     return messages
 
 
-# ---- メッセージ作成（オペレーター側から）----
+# メッセージ送信（オペレーター想定だけど、いったん認証なし）
 @router.post("/sessions/{session_id}/messages", response_model=schemas.MessageRead)
 async def post_message(
     session_id: uuid.UUID,
     payload: schemas.MessageCreate,
     db: AsyncSession = Depends(get_db),
+    # current_user: models.User = Depends(get_current_user),  ← 一旦外す
 ):
-    # セッション存在確認
     sess_result = await db.execute(
         select(models.Session).where(models.Session.id == session_id)
     )
@@ -91,7 +113,6 @@ async def post_message(
     )
     db.add(msg)
 
-    # セッションの最終アクティブ更新
     sess.last_active_at = datetime.utcnow()
     await db.commit()
     await db.refresh(msg)
