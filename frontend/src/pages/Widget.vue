@@ -179,19 +179,19 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* ページ全体（埋め込み用でも、この中が iframe に入るイメージ） */
+/* ページ全体（iframe 内のルート要素） */
 .widget-page {
   position: relative;
   width: 100%;
-  height: 100vh; /* デモ用。実際の埋め込みは iframe の高さ次第 */
-  background: #020617;
+  height: 100%;
+  background: transparent;
 }
 
 /* 右下のランチャーボタン */
 .widget-launcher {
-  position: fixed;
-  right: 24px;
-  bottom: 20px;
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
   z-index: 40;
   border: none;
   border-radius: 999px;
@@ -206,15 +206,15 @@ onBeforeUnmount(() => {
 
 /* ウィジェット本体（ランチャーの上に出る） */
 .widget-container {
-  position: fixed;
-  right: 24px;
-  bottom: 64px;
+  position: absolute;
+  right: 0;
+  bottom: 48px; /* ランチャーボタンの少し上 */
   z-index: 30;
 }
 
 .widget {
   width: 360px;
-  height: 540px;
+  height: 480px;
   background: #020617;
   border-radius: 16px;
   box-shadow: 0 18px 35px rgba(0, 0, 0, 0.45);
