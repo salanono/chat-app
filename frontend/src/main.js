@@ -1,6 +1,7 @@
 // frontend/src/main.js
 import { createApp } from "vue";
 import App from "./App.vue";
-import "./style.css"; // あるなら
+import router from "./router";
+import "./style.css"; // もしあれば
 
-createApp(App).mount("#app");
+createApp(App).use(router).mount("#app");
