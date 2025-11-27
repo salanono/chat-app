@@ -198,17 +198,22 @@ async def list_sessions(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    # ★ ここを変更：
+    #   「メッセージが1件以上あるセッションだけ」取得するようにする
     stmt = (
         select(models.Session)
+        .join(models.Message, models.Session.id == models.Message.session_id)
         .where(
             models.Session.owner_user_id == current_user.id,
             models.Session.company_id == current_user.company_id,
         )
+        .distinct()  # 同じセッションが複数メッセージで重複しないように
         .order_by(models.Session.last_active_at.desc())
     )
     result = await db.execute(stmt)
     sessions = result.scalars().all()
 
+    # 未読数をまとめて集計
     session_ids = [s.id for s in sessions]
     if session_ids:
         unread_stmt = (
@@ -235,9 +240,9 @@ async def list_sessions(
             "visitor_identifier": s.visitor_identifier,
             "status": s.status.value if hasattr(s.status, "value") else str(s.status),
             "last_active_at": s.last_active_at.isoformat() if s.last_active_at else None,
-            "unread_count": int(unread_map.get(s.id, 0)),  # ★ 追加
-    }
-    for s in sessions
+            "unread_count": int(unread_map.get(s.id, 0)),
+        }
+        for s in sessions
     ]
 
 
@@ -275,6 +280,7 @@ async def get_messages(
     )
     messages = result_msg.scalars().all()
 
+    # ビジターからのメッセージを既読に
     await db.execute(
         models.Message.__table__.update()
         .where(
@@ -285,11 +291,14 @@ async def get_messages(
         .values(is_read=True, read_at=datetime.utcnow())
     )
     await db.commit()
+
     return [
         {
             "id": m.id,
             "session_id": str(m.session_id),
-            "sender_type": m.sender_type.value if hasattr(m.sender_type, "value") else str(m.sender_type),
+            "sender_type": m.sender_type.value
+            if hasattr(m.sender_type, "value")
+            else str(m.sender_type),
             "sender_id": m.sender_id,
             "content": m.content,
             "attachment_url": m.attachment_url,
@@ -357,6 +366,7 @@ async def post_message(
         "attachment_url": msg.attachment_url,
         "created_at": msg.created_at.isoformat(),
     }
+
 
 # =============================
 # ウィジェット用: セッション作成 or 取得
@@ -475,14 +485,27 @@ async def widget_get_messages(
         for m in messages
     ]
 
+
+# -----------------------------
+# 管理画面: セッションをクローズ
+# POST /api/sessions/{session_id}/close
+# -----------------------------
 @router.post("/sessions/{session_id}/close")
-async def close_session(session_id: UUID, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+async def close_session(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
     # セッション取得
     q = await db.execute(
         select(models.Session).where(models.Session.id == session_id)
     )
     session = q.scalar_one_or_none()
-    if not session:
+    if (
+        not session
+        or session.owner_user_id != user.id
+        or session.company_id != user.company_id
+    ):
         raise HTTPException(status_code=404, detail="Session not found")
 
     # ステータス変更

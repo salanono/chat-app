@@ -304,6 +304,13 @@ const connectSocket = () => {
     isConnected.value = true;
     console.log("[admin] socket connected", socket.value.id);
 
+    // ★ 接続したらまず「operators」ルームに参加させる
+    socket.value.emit("join_session", {
+      session_id: null, // ← join_session 側で None / null は無視する
+      role: "operator",
+    });
+
+    // すでに選択中のセッションがあれば、そのセッション room にも join
     if (selectedSessionId.value) {
       socket.value.emit("join_session", {
         session_id: selectedSessionId.value,
@@ -318,34 +325,39 @@ const connectSocket = () => {
   });
 
   socket.value.on("new_message", async (msg) => {
+    // sender_type を大文字に正規化
     if (msg.sender_type) {
       msg.sender_type = msg.sender_type.toUpperCase();
     }
 
-    // VISITOR メッセージならステータスと未読数を更新
+    // --- セッションリスト側の更新 ---
     if (msg.sender_type === "VISITOR") {
       const target = sessions.value.find((s) => s.id === msg.session_id);
+
       if (target) {
-        // クローズされていたらフロント側も OPEN に戻す
         if (target.status === "CLOSED") {
           target.status = "OPEN";
         }
-        // 管理画面で開いていないセッションだけ未読を増やす
         if (msg.session_id !== selectedSessionId.value) {
           target.unread_count = (target.unread_count || 0) + 1;
         }
-        // last_active_at も更新（ソート用）
         target.last_active_at = msg.created_at || new Date().toISOString();
       } else {
-        // セッションリストに存在しない場合は一覧を取り直す（クローズ後に新規セッションが作られたケースなど）
-        fetchSessions();
+        // ★ セッションがまだ一覧にない（= 新規セッション）ので取り直す
+        await fetchSessions();
       }
     }
 
-    // 今見ているセッションのメッセージはサーバーから取り直す
+    // --- 右側チャット画面の更新 ---
     if (msg.session_id === selectedSessionId.value) {
       await fetchMessages(selectedSessionId.value);
     }
+  });
+
+  // session_created リスナーはあってもいいけど、上の修正だけでも動くはず
+  socket.value.on("session_created", async ({ session_id }) => {
+    console.log("[admin] new session detected:", session_id);
+    await fetchSessions();
   });
 };
 
