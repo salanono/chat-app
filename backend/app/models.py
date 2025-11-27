@@ -8,8 +8,10 @@ from sqlalchemy import (
     Integer,
     String,
     DateTime,
+    Boolean,
     Enum as SAEnum,
     Text,
+    text,
     ForeignKey,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -119,5 +121,7 @@ class Message(Base):
     content = Column(Text, nullable=False)
     attachment_url = Column(String(1024), nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    is_read = Column(Boolean, nullable=False, server_default=text("false"))
+    read_at = Column(DateTime(timezone=False), nullable=True)
 
     session = relationship("Session", back_populates="messages")

@@ -5,6 +5,7 @@ import uuid
 
 from .db import AsyncSessionLocal
 from . import models
+from sqlalchemy import insert
 
 # 非同期サーバー
 sio = socketio.AsyncServer(
@@ -51,17 +52,21 @@ async def visitor_message(sid, data):
     async with AsyncSessionLocal() as db:
         msg = models.Message(
             session_id=session_uuid,
-            # ★ ここを文字列 → Enum に
             sender_type=models.SenderType.VISITOR,
             content=content,
             created_at=datetime.utcnow(),
+            is_read=False,
+            read_at=None,
         )
         db.add(msg)
 
         await db.execute(
             models.Session.__table__.update()
             .where(models.Session.id == session_uuid)
-            .values(last_active_at=datetime.utcnow())
+            .values(
+                last_active_at=datetime.utcnow(),
+                status=models.SessionStatus.OPEN,  # クローズしていても自動で再オープン
+            )
         )
 
         await db.commit()
@@ -97,11 +102,13 @@ async def operator_message(sid, data):
     async with AsyncSessionLocal() as db:
         msg = models.Message(
             session_id=session_uuid,
-            # ★ ここも Enum
             sender_type=models.SenderType.OPERATOR,
             content=content,
             created_at=datetime.utcnow(),
+            is_read=True,
+            read_at=datetime.utcnow(),
         )
+
         db.add(msg)
 
         await db.execute(
@@ -116,6 +123,7 @@ async def operator_message(sid, data):
         payload = {
             "id": str(msg.id),
             "session_id": str(msg.session_id),
+            # フロント用に小文字で渡す（"operator"）
             "sender_type": msg.sender_type.value.lower()
             if hasattr(msg.sender_type, "value")
             else str(msg.sender_type).lower(),

@@ -1,184 +1,140 @@
 <!-- frontend/src/pages/Admin.vue -->
 <template>
-  <div class="admin-page">
-    <div class="admin-shell">
-      <!-- ヘッダー -->
-      <header class="admin-header">
-        <div class="admin-header-left">
-          <div class="admin-logo">
-            <span>CS</span>
-          </div>
-          <div>
-            <h1 class="admin-title">サポート管理画面</h1>
-            <p class="admin-subtitle">
-              訪問者とのチャットをリアルタイムに確認・返信できます
-            </p>
-          </div>
+  <div class="admin-layout">
+    <!-- ヘッダー -->
+    <header class="admin-header">
+      <h1>管理画面</h1>
+      <button class="logout-btn" @click="logout">ログアウト</button>
+    </header>
+
+    <div class="admin-body">
+      <!-- 左側：セッション一覧 -->
+      <aside class="session-list">
+        <h2>セッション一覧</h2>
+
+        <!-- ★ クローズフィルタ -->
+        <div class="session-filters">
+          <label class="filter-toggle">
+            <input type="checkbox" v-model="hideClosed" />
+            クローズを非表示
+          </label>
         </div>
 
-        <button class="logout-btn" @click="logout">ログアウト</button>
-      </header>
+        <div v-if="loading" class="loading">読み込み中…</div>
+        <p v-if="error" class="error">{{ error }}</p>
 
-      <!-- メイン 2カラム -->
-      <main class="admin-main">
-        <p v-if="error" class="admin-error">{{ error }}</p>
+        <ul v-if="!loading" class="session-items">
+          <li
+            v-for="s in filteredSessions"
+            :key="s.id"
+            class="session-item"
+            @click="selectSession(s)"
+          >
+            <span v-if="s.unread_count > 0" class="session-item__unread-dot" />
+            <div class="session-main">
+              <div class="session-title">
+                {{ displaySessionTitle(s) }}
+              </div>
 
-        <div class="admin-layout">
-          <!-- 左カラム：セッション一覧 -->
-          <aside class="sessions-pane">
-            <div class="sessions-header">
+              <div class="session-meta">
+                <span
+                  class="session-status"
+                  :class="`session-status--${s.status}`"
+                >
+                  {{ s.status === "OPEN" ? "対応中" : "クローズ" }}
+                </span>
+                <span class="session-time">
+                  {{ formatTime(s.last_active_at) }}
+                </span>
+              </div>
+            </div>
+
+            <!-- ★ 対応済みボタン -->
+            <button
+              v-if="s.status === 'OPEN'"
+              class="close-btn"
+              @click.stop="closeSession(s.id)"
+            >
+              対応済み
+            </button>
+          </li>
+        </ul>
+      </aside>
+
+      <!-- 右側：チャット詳細 -->
+      <main class="chat-detail">
+        <div v-if="!selectedSessionId" class="empty-chat">
+          左のセッションを選択してください
+        </div>
+
+        <div v-else class="chat-panel">
+          <!-- ヘッダー（widget 風） -->
+          <header class="chat-panel__header">
+            <div class="chat-panel__header-left">
+              <div class="chat-panel__avatar">
+                <span>CS</span>
+              </div>
               <div>
-                <h2 class="sessions-title">セッション一覧</h2>
-                <p class="sessions-subtitle">
-                  現在 {{ sessions.length }} 件のセッションがあります
+                <h2 class="chat-panel__title">サポートチャット</h2>
+                <p class="chat-panel__subtitle">
+                  {{ selectedSessionName || "訪問者" }} さんとの会話
                 </p>
               </div>
-              <button
-                class="refresh-btn"
-                @click="fetchSessions"
-                :disabled="loading"
+            </div>
+            <div
+              class="chat-panel__status"
+              :class="{ 'chat-panel__status--online': isConnected }"
+            >
+              <span class="chat-panel__status-dot" />
+              <span class="chat-panel__status-text">
+                {{ isConnected ? "オンライン" : "接続中…" }}
+              </span>
+            </div>
+          </header>
+
+          <!-- メッセージ一覧 -->
+          <main class="chat-panel__messages">
+            <transition-group name="msg" tag="div">
+              <div
+                v-for="m in messages"
+                :key="m.id"
+                class="msg"
+                :class="m.sender_type === 'OPERATOR' ? 'msg--me' : 'msg--other'"
               >
-                {{ loading ? "更新中..." : "再読込" }}
-              </button>
-            </div>
-
-            <div v-if="sessions.length === 0" class="sessions-empty">
-              <p>まだセッションがありません。</p>
-              <p>ウィジェットからメッセージが来ると、ここに表示されます。</p>
-            </div>
-
-            <ul v-else class="session-list">
-              <li
-                v-for="s in sessions"
-                :key="s.id"
-                class="session-item"
-                :class="{ 'session-item--active': s.id === selectedSessionId }"
-                @click="selectSession(s)"
-              >
-                <div class="session-main-row">
-                  <div class="session-visitor">
-                    <div class="session-avatar">
-                      <span>{{ (s.visitor_name || "名無し")[0] }}</span>
-                    </div>
-                    <div>
-                      <div class="session-name">
-                        {{ s.visitor_name || "名無しのお客さま" }}
-                      </div>
-                      <div class="session-id">
-                        ID: {{ s.visitor_identifier }}
-                      </div>
-                    </div>
+                <div class="msg__inner">
+                  <div class="msg__bubble">
+                    <p class="msg__text">{{ m.content }}</p>
                   </div>
-
-                  <span
-                    class="session-status"
-                    :class="
-                      s.status === 'OPEN'
-                        ? 'session-status--open'
-                        : 'session-status--closed'
-                    "
-                  >
-                    {{ s.status === "OPEN" ? "対応中" : "クローズ" }}
-                  </span>
-                </div>
-
-                <div class="session-meta-row">
-                  <span class="session-time">
-                    最終: {{ formatTime(s.last_active_at) }}
-                  </span>
-                </div>
-              </li>
-            </ul>
-          </aside>
-
-          <!-- 右カラム：チャット詳細 -->
-          <section class="chat-pane">
-            <div v-if="!selectedSessionId" class="chat-empty">
-              <p class="chat-empty-title">セッションを選択してください</p>
-              <p class="chat-empty-text">
-                左の一覧からセッションを選ぶと、ここにメッセージが表示されます。
-              </p>
-            </div>
-
-            <div v-else class="chat-panel">
-              <!-- チャットヘッダー（ウィジェット風） -->
-              <header class="chat-header">
-                <div class="chat-header-left">
-                  <div class="chat-avatar">
-                    <span>CS</span>
-                  </div>
-                  <div>
-                    <h2 class="chat-title">
-                      {{ currentSessionName }}
-                    </h2>
-                    <p class="chat-subtitle">
-                      訪問者ID: {{ currentSessionIdText }}
-                    </p>
+                  <div class="msg__time">
+                    {{ formatTime(m.created_at) }}
                   </div>
                 </div>
+              </div>
+            </transition-group>
 
-                <div
-                  class="chat-status"
-                  :class="{ 'chat-status--online': isSocketConnected }"
-                >
-                  <span class="chat-status-dot" />
-                  <span class="chat-status-text">
-                    {{
-                      isSocketConnected
-                        ? "リアルタイム接続中"
-                        : "再接続しています…"
-                    }}
-                  </span>
-                </div>
-              </header>
-
-              <!-- メッセージ一覧 -->
-              <main class="chat-messages" ref="messagesContainerRef">
-                <transition-group name="msg" tag="div">
-                  <div
-                    v-for="m in messages"
-                    :key="m.id"
-                    class="msg"
-                    :class="
-                      m.sender_type === 'operator' ? 'msg--me' : 'msg--other'
-                    "
-                  >
-                    <div class="msg__inner">
-                      <div class="msg__bubble">
-                        <p class="msg__text">{{ m.content }}</p>
-                      </div>
-                      <div class="msg__time">
-                        {{ formatTime(m.created_at) }}
-                      </div>
-                    </div>
-                  </div>
-                </transition-group>
-
-                <div v-if="messages.length === 0" class="chat-messages-empty">
-                  <p>まだメッセージはありません。</p>
-                  <p>訪問者からの最初のメッセージをお待ちください。</p>
-                </div>
-              </main>
-
-              <!-- 入力エリア -->
-              <footer class="chat-footer">
-                <input
-                  v-model="chatInput"
-                  type="text"
-                  class="chat-input"
-                  placeholder="メッセージを入力して Enter で送信"
-                  @keyup.enter="sendMessage"
-                />
-                <button
-                  class="chat-send-btn"
-                  @click="sendMessage"
-                  :disabled="!isSocketConnected || !chatInput.trim()"
-                >
-                  送信
-                </button>
-              </footer>
+            <div v-if="messages.length === 0" class="chat-panel__empty">
+              <p>まだメッセージはありません。</p>
+              <p>右下の入力欄からメッセージを送信してみましょう。</p>
             </div>
-          </section>
+          </main>
+
+          <!-- 入力エリア -->
+          <footer class="chat-panel__footer">
+            <input
+              v-model="inputText"
+              type="text"
+              class="chat-panel__input"
+              placeholder="メッセージを入力して Enter で送信"
+              @keyup.enter="sendMessage"
+            />
+            <button
+              class="chat-panel__button"
+              @click="sendMessage"
+              :disabled="!isConnected || !inputText.trim()"
+            >
+              送信
+            </button>
+          </footer>
         </div>
       </main>
     </div>
@@ -186,7 +142,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, onMounted, onBeforeUnmount, watch, computed } from "vue";
 import { useRouter } from "vue-router";
 import { io } from "socket.io-client";
 
@@ -199,39 +155,22 @@ const loading = ref(false);
 const error = ref("");
 
 const selectedSessionId = ref(null);
+const selectedSessionName = ref("");
+
 const messages = ref([]);
-const chatInput = ref("");
+const inputText = ref("");
 
-// socket 関連
 const socket = ref(null);
-const isSocketConnected = ref(false);
+const isConnected = ref(false);
 
-// メッセージエリア参照
-const messagesContainerRef = ref(null);
+// ★ クローズ非表示フラグ
+const hideClosed = ref(false);
 
-const currentSession = computed(
-  () => sessions.value.find((s) => s.id === selectedSessionId.value) || null
-);
-
-const currentSessionName = computed(() =>
-  currentSession.value
-    ? currentSession.value.visitor_name || "名無しのお客さま"
-    : ""
-);
-
-const currentSessionIdText = computed(() =>
-  currentSession.value ? currentSession.value.visitor_identifier : ""
-);
-
-// 時刻整形（セッション一覧とチャットの両方で使う）
+// ---- 共通の時刻フォーマット（JST） ----
 const formatTime = (isoString) => {
   if (!isoString) return "";
-  const d = new Date(isoString);
-  if (Number.isNaN(d.getTime())) return isoString;
-
-  return d.toLocaleString("ja-JP", {
-    month: "2-digit",
-    day: "2-digit",
+  const fixed = isoString.endsWith("Z") ? isoString : isoString + "Z";
+  return new Date(fixed).toLocaleTimeString("ja-JP", {
     hour: "2-digit",
     minute: "2-digit",
   });
@@ -239,13 +178,47 @@ const formatTime = (isoString) => {
 
 const scrollMessagesToBottom = () => {
   requestAnimationFrame(() => {
-    const el = messagesContainerRef.value;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
+    const container = document.querySelector(".chat-panel__messages");
+    if (container) {
+      container.scrollTop = container.scrollHeight;
     }
   });
 };
 
+// ★ クローズ非表示用のフィルタ済みセッション＋ソート
+const filteredSessions = computed(() => {
+  // ベースのリスト（必要ならクローズを除外）
+  let list = sessions.value;
+  if (hideClosed.value) {
+    list = list.filter((s) => s.status !== "CLOSED");
+  }
+
+  // 未読あり → OPEN → CLOSED の順 ＋ 最終アクティブが新しい順
+  return [...list].sort((a, b) => {
+    const unreadA = (a.unread_count || 0) > 0;
+    const unreadB = (b.unread_count || 0) > 0;
+
+    // 1. 未読ありを上に
+    if (unreadA !== unreadB) {
+      return unreadA ? -1 : 1;
+    }
+
+    const openA = a.status === "OPEN";
+    const openB = b.status === "OPEN";
+
+    // 2. OPEN を CLOSED より上に
+    if (openA !== openB) {
+      return openA ? -1 : 1;
+    }
+
+    // 3. 最終アクティブ時刻が新しいものを上に
+    const tA = a.last_active_at ? new Date(a.last_active_at).getTime() : 0;
+    const tB = b.last_active_at ? new Date(b.last_active_at).getTime() : 0;
+    return tB - tA;
+  });
+});
+
+// ---- セッション一覧取得 ----
 const fetchSessions = async () => {
   loading.value = true;
   error.value = "";
@@ -278,7 +251,10 @@ const fetchSessions = async () => {
   loading.value = false;
 };
 
+// ---- 指定セッションのメッセージ履歴取得 ----
 const fetchMessages = async (sessionId) => {
+  if (!sessionId) return;
+
   const token = localStorage.getItem("admin_token");
   if (!token) {
     router.push("/admin/login");
@@ -296,62 +272,38 @@ const fetchMessages = async (sessionId) => {
   }
 
   if (!res.ok) {
-    error.value = "メッセージ取得に失敗しました";
+    error.value = "メッセージの取得に失敗しました";
     return;
   }
 
   messages.value = await res.json();
+  // sender_type を大文字に正規化
+  messages.value = messages.value.map((m) => ({
+    ...m,
+    sender_type: m.sender_type ? m.sender_type.toUpperCase() : m.sender_type,
+  }));
   scrollMessagesToBottom();
 };
 
-// セッション選択
-const selectSession = async (session) => {
-  if (!session || session.id === selectedSessionId.value) return;
-
+// ---- セッション選択 ----
+const selectSession = (session) => {
   selectedSessionId.value = session.id;
-  await fetchMessages(session.id);
-
-  // 選択したセッションの room に join
-  if (socket.value && isSocketConnected.value) {
-    socket.value.emit("join_session", {
-      session_id: session.id,
-      role: "operator",
-    });
-  }
+  selectedSessionName.value = session.visitor_name || "ゲスト";
 };
 
-// メッセージ送信（オペレーター → ビジター）
-const sendMessage = () => {
-  const text = chatInput.value.trim();
-  if (
-    !text ||
-    !selectedSessionId.value ||
-    !socket.value ||
-    !isSocketConnected.value
-  ) {
-    return;
-  }
-
-  socket.value.emit("operator_message", {
-    session_id: selectedSessionId.value,
-    content: text,
-  });
-
-  chatInput.value = "";
-};
-
-// Socket.IO 接続
+// ---- Socket.IO 接続 ----
 const connectSocket = () => {
+  if (socket.value) return;
+
   socket.value = io(API_BASE, {
     path: "/ws/socket.io",
     withCredentials: false,
   });
 
   socket.value.on("connect", () => {
-    isSocketConnected.value = true;
+    isConnected.value = true;
     console.log("[admin] socket connected", socket.value.id);
 
-    // すでに選択中のセッションがあれば join
     if (selectedSessionId.value) {
       socket.value.emit("join_session", {
         session_id: selectedSessionId.value,
@@ -361,90 +313,324 @@ const connectSocket = () => {
   });
 
   socket.value.on("disconnect", () => {
-    isSocketConnected.value = false;
+    isConnected.value = false;
     console.log("[admin] socket disconnected");
   });
 
-  socket.value.on("new_message", (msg) => {
-    // 現在見ているセッションのメッセージなら追加
-    if (msg.session_id === selectedSessionId.value) {
-      messages.value.push(msg);
-      scrollMessagesToBottom();
+  socket.value.on("new_message", async (msg) => {
+    if (msg.sender_type) {
+      msg.sender_type = msg.sender_type.toUpperCase();
     }
 
-    // 対応するセッションの last_active_at も軽く更新
-    const idx = sessions.value.findIndex((s) => s.id === msg.session_id);
-    if (idx !== -1) {
-      sessions.value[idx] = {
-        ...sessions.value[idx],
-        last_active_at: msg.created_at,
-      };
+    // VISITOR メッセージならステータスと未読数を更新
+    if (msg.sender_type === "VISITOR") {
+      const target = sessions.value.find((s) => s.id === msg.session_id);
+      if (target) {
+        // クローズされていたらフロント側も OPEN に戻す
+        if (target.status === "CLOSED") {
+          target.status = "OPEN";
+        }
+        // 管理画面で開いていないセッションだけ未読を増やす
+        if (msg.session_id !== selectedSessionId.value) {
+          target.unread_count = (target.unread_count || 0) + 1;
+        }
+        // last_active_at も更新（ソート用）
+        target.last_active_at = msg.created_at || new Date().toISOString();
+      } else {
+        // セッションリストに存在しない場合は一覧を取り直す（クローズ後に新規セッションが作られたケースなど）
+        fetchSessions();
+      }
+    }
+
+    // 今見ているセッションのメッセージはサーバーから取り直す
+    if (msg.session_id === selectedSessionId.value) {
+      await fetchMessages(selectedSessionId.value);
     }
   });
 };
 
-// ログアウト
+// 選択されたセッションが変わったら履歴取得＋ルーム join
+watch(selectedSessionId, async (newId) => {
+  messages.value = [];
+  if (!newId) return;
+
+  await fetchMessages(newId);
+
+  // このセッションは開いたので未読を 0 にする
+  const target = sessions.value.find((s) => s.id === newId);
+  if (target) {
+    target.unread_count = 0;
+  }
+
+  if (socket.value && isConnected.value) {
+    socket.value.emit("join_session", {
+      session_id: newId,
+      role: "operator",
+    });
+  }
+});
+
+// ---- メッセージ送信（オペレーター側） ----
+const sendMessage = () => {
+  const text = inputText.value.trim();
+  if (
+    !text ||
+    !socket.value ||
+    !isConnected.value ||
+    !selectedSessionId.value
+  ) {
+    return;
+  }
+
+  socket.value.emit("operator_message", {
+    session_id: selectedSessionId.value,
+    content: text,
+  });
+
+  inputText.value = "";
+};
+
+// ---- ログアウト ----
 const logout = () => {
   localStorage.removeItem("admin_token");
   router.push("/admin/login");
 };
 
-onMounted(async () => {
-  await fetchSessions();
+onMounted(() => {
   connectSocket();
+  fetchSessions();
 });
 
 onBeforeUnmount(() => {
-  if (socket.value) {
-    socket.value.disconnect();
-  }
+  if (socket.value) socket.value.disconnect();
 });
+
+const closeSession = async (sessionId) => {
+  const token = localStorage.getItem("admin_token");
+  if (!token) return;
+
+  const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (res.ok) {
+    // 画面を更新
+    fetchSessions();
+
+    // 今見ていたセッションなら detail も閉じる
+    if (sessionId === selectedSessionId.value) {
+      selectedSessionId.value = null;
+      messages.value = [];
+    }
+  } else {
+    alert("ステータス変更に失敗しました");
+  }
+};
+
+const displaySessionTitle = (s) => {
+  // セッションIDの先頭4文字だけを表示
+  const shortId = s.id ? s.id.slice(0, 4) : "----";
+  return shortId;
+};
 </script>
 
 <style>
-.admin-page {
-  min-height: 100vh;
-  margin: 0;
-  padding: 24px;
-  background: #f3f4f6;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  box-sizing: border-box;
-}
-
-.admin-shell {
-  width: 1160px;
-  max-width: 100%;
-  background: #ffffff;
-  border-radius: 20px;
-  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.15);
-  border: 1px solid #e2e8f0;
-  overflow: hidden;
+.admin-layout {
   display: flex;
   flex-direction: column;
+  height: 100vh;
+  background: #f8fafc;
+  font-family: sans-serif;
 }
 
-/* ヘッダー：ウィジェット系 */
+/* ヘッダー */
 .admin-header {
-  padding: 14px 18px;
+  padding: 12px 20px;
+  background: #e0f7fa;
+  border-bottom: 1px solid #bae6fd;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.admin-header h1 {
+  margin: 0;
+  font-size: 18px;
+  color: #0284c7;
+  font-weight: 600;
+}
+
+.logout-btn {
+  background: #ef5350;
+  border: none;
+  padding: 6px 12px;
+  color: #fff;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.logout-btn:hover {
+  background: #e53935;
+}
+
+/* 2カラム */
+.admin-body {
+  flex: 1;
+  display: flex;
+}
+
+/* 左：セッション一覧 */
+.session-list {
+  width: 280px;
+  background: #ffffff;
+  border-right: 1px solid #e2e8f0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.session-list h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: #0f172a;
+}
+
+/* ★ フィルタ部分 */
+.session-filters {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+}
+
+.filter-toggle input[type="checkbox"] {
+  accent-color: #4fc3f7;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.session-items {
+  padding: 0;
+  list-style: none;
+  margin: 0;
+}
+
+.session-item {
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  background: #f1f5f9;
+  margin-bottom: 8px;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.session-item:hover {
+  background: #e0f2fe;
+  transform: translateY(-1px);
+}
+
+.session-item.active {
+  background: #bae6fd;
+}
+
+.session-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 4px;
+}
+
+.session-meta {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.session-status {
+  text-transform: uppercase;
+}
+
+.session-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.loading {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.error {
+  color: #ef5350;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+/* 右：チャットパネル */
+.chat-detail {
+  flex: 1;
+  padding: 16px 24px;
+  display: flex;
+  align-items: stretch;
+}
+
+.empty-chat {
+  margin: auto;
+  text-align: center;
+  color: #94a3b8;
+}
+
+/* widget 風チャットパネル（大きめ） */
+.chat-panel {
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  background: #ffffff;
+  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  display: flex;
+  flex-direction: column;
+  color: #1e293b;
+  overflow: hidden;
+}
+
+/* ヘッダー */
+.chat-panel__header {
+  padding: 12px 16px;
   border-bottom: 1px solid #bae6fd;
   background: #e0f7fa;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-}
-
-.admin-header-left {
-  display: flex;
-  align-items: center;
   gap: 12px;
 }
 
-.admin-logo {
+.chat-panel__header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-panel__avatar {
   width: 36px;
   height: 36px;
   border-radius: 999px;
@@ -453,299 +639,28 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
 }
 
-.admin-title {
+.chat-panel__title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: #0284c7;
-}
-
-.admin-subtitle {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: #64748b;
-}
-
-/* ログアウトボタン */
-.logout-btn {
-  background: #f97373;
-  color: white;
-  padding: 8px 14px;
-  border: none;
-  cursor: pointer;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
-  box-shadow: 0 6px 14px rgba(248, 113, 113, 0.35);
-}
-
-.logout-btn:hover {
-  background: #ef4444;
-}
-
-/* メイン */
-.admin-main {
-  padding: 12px 16px 16px;
-}
-
-.admin-error {
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: #fee2e2;
-  color: #b91c1c;
-  font-size: 13px;
-  margin-bottom: 10px;
-}
-
-/* 2カラムレイアウト */
-.admin-layout {
-  display: grid;
-  grid-template-columns: 340px minmax(0, 1fr);
-  gap: 12px;
-  height: 640px;
-}
-
-/* 左：セッション一覧 */
-.sessions-pane {
-  border-radius: 14px;
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-  padding: 10px 10px 12px;
-  display: flex;
-  flex-direction: column;
-}
-
-.sessions-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.sessions-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: #0f172a;
-}
-
-.sessions-subtitle {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.refresh-btn {
-  border: none;
-  border-radius: 999px;
-  padding: 6px 10px;
-  font-size: 11px;
-  background: #e0f7fa;
-  color: #0284c7;
-  cursor: pointer;
-}
-
-.refresh-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.sessions-empty {
-  padding: 18px 12px;
-  text-align: center;
-  font-size: 13px;
-  color: #94a3b8;
-}
-
-.session-list {
-  list-style: none;
-  padding: 0;
-  margin: 4px 0 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.session-item {
-  padding: 8px 9px;
-  border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  background: #ffffff;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  cursor: pointer;
-  transition: background 0.12s ease, box-shadow 0.12s ease,
-    border-color 0.12s ease;
-}
-
-.session-item:hover {
-  background: #f1f5f9;
-  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.04);
-}
-
-.session-item--active {
-  border-color: #4fc3f7;
-  background: #e0f7fa;
-  box-shadow: 0 6px 16px rgba(56, 189, 248, 0.25);
-}
-
-.session-main-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.session-visitor {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.session-avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: 999px;
-  background: #e0f7fa;
-  color: #0284c7;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.session-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: #0f172a;
-}
-
-.session-id {
-  font-size: 11px;
-  color: #9ca3af;
-}
-
-.session-status {
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid #e5e7eb;
-  background: #f9fafb;
-  color: #6b7280;
-  white-space: nowrap;
-}
-
-.session-status--open {
-  border-color: #4fc3f7;
-  background: #e0f7fa;
-  color: #0284c7;
-}
-
-.session-status--closed {
-  border-color: #e5e7eb;
-  background: #f9fafb;
-  color: #6b7280;
-}
-
-.session-meta-row {
-  display: flex;
-  justify-content: flex-end;
-  font-size: 11px;
-  color: #94a3b8;
-}
-
-.session-time {
-  white-space: nowrap;
-}
-
-/* 右：チャット詳細 */
-.chat-pane {
-  border-radius: 14px;
-  border: 1px solid #e2e8f0;
-  background: #ffffff;
-  display: flex;
-  flex-direction: column;
-}
-
-.chat-empty {
-  margin: auto;
-  text-align: center;
-  padding: 24px;
-  color: #94a3b8;
-}
-
-.chat-empty-title {
   font-size: 16px;
-  margin-bottom: 8px;
-  color: #0f172a;
-}
-
-.chat-empty-text {
-  font-size: 13px;
-}
-
-/* チャットパネル（ウィジェットっぽい） */
-.chat-panel {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-/* チャットヘッダー */
-.chat-header {
-  padding: 10px 12px;
-  border-bottom: 1px solid #bae6fd;
-  background: #e0f7fa;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.chat-header-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.chat-avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 999px;
-  background: #4fc3f7;
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.chat-title {
-  margin: 0;
-  font-size: 15px;
   font-weight: 600;
   color: #0284c7;
 }
 
-.chat-subtitle {
+.chat-panel__subtitle {
   margin: 2px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: #64748b;
 }
 
-.chat-status {
+.chat-panel__status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
+  padding: 4px 10px;
   border-radius: 999px;
   border: 1px solid #94a3b8;
   background: #f8fafc;
@@ -753,26 +668,26 @@ onBeforeUnmount(() => {
   color: #475569;
 }
 
-.chat-status--online {
+.chat-panel__status--online {
   border-color: #4fc3f7;
   color: #0284c7;
 }
 
-.chat-status-dot {
+.chat-panel__status-dot {
   width: 7px;
   height: 7px;
   border-radius: 999px;
   background: #94a3b8;
 }
 
-.chat-status--online .chat-status-dot {
+.chat-panel__status--online .chat-panel__status-dot {
   background: #4fc3f7;
 }
 
 /* メッセージ一覧 */
-.chat-messages {
+.chat-panel__messages {
   flex: 1;
-  padding: 10px 12px;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -780,7 +695,7 @@ onBeforeUnmount(() => {
   background: #f8fafc;
 }
 
-/* メッセージコンテナ */
+/* メッセージ共通 */
 .msg {
   display: flex;
 }
@@ -796,7 +711,7 @@ onBeforeUnmount(() => {
 .msg__inner {
   display: flex;
   flex-direction: column;
-  max-width: 75%;
+  max-width: 70%;
   margin: 2px 0;
 }
 
@@ -809,23 +724,22 @@ onBeforeUnmount(() => {
   align-items: flex-start;
 }
 
-/* 吹き出し */
 .msg__bubble {
   max-width: 100%;
-  padding: 6px 10px;
-  border-radius: 14px;
+  padding: 7px 11px;
+  border-radius: 16px;
   font-size: 13px;
   line-height: 1.4;
 }
 
-/* 管理者（オペレーター）= 右 */
+/* オペレーター（自分） */
 .msg--me .msg__bubble {
   background: #e0f7fa;
   border: 1px solid #bae6fd;
   color: #0369a1;
 }
 
-/* 訪問者 = 左 */
+/* 訪問者 */
 .msg--other .msg__bubble {
   background: #f1f5f9;
   border: 1px solid #e2e8f0;
@@ -834,8 +748,6 @@ onBeforeUnmount(() => {
 
 .msg__text {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.4;
 }
 
 .msg__time {
@@ -853,15 +765,15 @@ onBeforeUnmount(() => {
   text-align: left;
 }
 
-.chat-messages-empty {
+.chat-panel__empty {
   margin: auto;
   text-align: center;
   font-size: 13px;
-  color: #9ca3af;
+  color: #94a3b8;
 }
 
 /* 入力エリア */
-.chat-footer {
+.chat-panel__footer {
   padding: 10px 12px;
   border-top: 1px solid #e2e8f0;
   display: flex;
@@ -869,9 +781,9 @@ onBeforeUnmount(() => {
   background: #ffffff;
 }
 
-.chat-input {
+.chat-panel__input {
   flex: 1;
-  padding: 7px 12px;
+  padding: 8px 12px;
   border-radius: 999px;
   border: 1px solid #cbd5e1;
   background: white;
@@ -879,13 +791,13 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
-.chat-input:focus {
+.chat-panel__input:focus {
   outline: none;
   border-color: #4fc3f7;
 }
 
-.chat-send-btn {
-  padding: 7px 14px;
+.chat-panel__button {
+  padding: 8px 16px;
   border-radius: 999px;
   border: none;
   font-size: 13px;
@@ -895,12 +807,12 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-.chat-send-btn:disabled {
+.chat-panel__button:disabled {
   opacity: 0.6;
   cursor: default;
 }
 
-/* メッセージ追加アニメーション */
+/* メッセージアニメーション */
 .msg-enter-active {
   transition: all 0.16s ease-out;
 }
@@ -910,27 +822,38 @@ onBeforeUnmount(() => {
   transform: translateY(4px) scale(0.98);
 }
 
-/* スクロールバー */
-.session-list::-webkit-scrollbar,
-.chat-messages::-webkit-scrollbar {
-  width: 6px;
+.session-item {
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  background: #f1f5f9;
+  margin-bottom: 8px;
+  transition: background 0.15s ease, transform 0.1s ease;
+  position: relative;
 }
 
-.session-list::-webkit-scrollbar-thumb,
-.chat-messages::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+.session-item__unread-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
   border-radius: 999px;
+  background: #4fc3f7;
+  position: absolute;
+  top: 6px;
+  right: 8px;
 }
 
-@media (max-width: 960px) {
-  .admin-layout {
-    grid-template-columns: 1fr;
-    height: auto;
-  }
-
-  .chat-pane {
-    margin-top: 12px;
-    min-height: 420px;
-  }
+.close-btn {
+  margin-top: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  border: none;
+  background: #60a5fa;
+  color: white;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.close-btn:hover {
+  background: #3b82f6;
 }
 </style>

@@ -41,7 +41,10 @@ const loadHistory = async () => {
     `${API_BASE}/api/widget/sessions/${sessionId.value}/messages`
   );
   const data = await res.json();
-  messages.value = data;
+  messages.value = data.map((m) => ({
+    ...m,
+    sender_type: normalizeSenderType(m.sender_type),
+  }));
   scrollToBottom();
 };
 
@@ -79,7 +82,11 @@ const connectSocket = () => {
 
   socket.value.on("new_message", (msg) => {
     if (msg.session_id === sessionId.value) {
-      messages.value.push(msg);
+      const normalized = {
+        ...msg,
+        sender_type: normalizeSenderType(msg.sender_type),
+      };
+      messages.value.push(normalized);
       scrollToBottom();
     }
   });
@@ -129,6 +136,18 @@ const formatTime = (isoString) => {
     hour: "2-digit",
     minute: "2-digit",
   });
+};
+
+// 送信者タイプを統一（大文字/小文字どちらでもOKにする）
+const normalizeSenderType = (raw) => {
+  if (!raw) return "visitor";
+  const upper = String(raw).toUpperCase();
+
+  if (upper === "VISITOR") return "visitor";
+  if (upper === "OPERATOR") return "operator";
+  if (upper === "SYSTEM") return "system";
+
+  return String(raw).toLowerCase(); // 念のため
 };
 </script>
 

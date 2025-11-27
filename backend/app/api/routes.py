@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -209,6 +209,25 @@ async def list_sessions(
     result = await db.execute(stmt)
     sessions = result.scalars().all()
 
+    session_ids = [s.id for s in sessions]
+    if session_ids:
+        unread_stmt = (
+            select(
+                models.Message.session_id,
+                func.count(models.Message.id).label("cnt"),
+            )
+            .where(
+                models.Message.session_id.in_(session_ids),
+                models.Message.sender_type == models.SenderType.VISITOR,
+                models.Message.is_read.is_(False),
+            )
+            .group_by(models.Message.session_id)
+        )
+        unread_result = await db.execute(unread_stmt)
+        unread_map = {row.session_id: row.cnt for row in unread_result}
+    else:
+        unread_map = {}
+
     return [
         {
             "id": str(s.id),
@@ -216,8 +235,9 @@ async def list_sessions(
             "visitor_identifier": s.visitor_identifier,
             "status": s.status.value if hasattr(s.status, "value") else str(s.status),
             "last_active_at": s.last_active_at.isoformat() if s.last_active_at else None,
-        }
-        for s in sessions
+            "unread_count": int(unread_map.get(s.id, 0)),  # ★ 追加
+    }
+    for s in sessions
     ]
 
 
@@ -255,6 +275,16 @@ async def get_messages(
     )
     messages = result_msg.scalars().all()
 
+    await db.execute(
+        models.Message.__table__.update()
+        .where(
+            models.Message.session_id == session.id,
+            models.Message.sender_type == models.SenderType.VISITOR,
+            models.Message.is_read.is_(False),
+        )
+        .values(is_read=True, read_at=datetime.utcnow())
+    )
+    await db.commit()
     return [
         {
             "id": m.id,
@@ -444,3 +474,18 @@ async def widget_get_messages(
         }
         for m in messages
     ]
+
+@router.post("/sessions/{session_id}/close")
+async def close_session(session_id: UUID, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    # セッション取得
+    q = await db.execute(
+        select(models.Session).where(models.Session.id == session_id)
+    )
+    session = q.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # ステータス変更
+    session.status = models.SessionStatus.CLOSED
+    await db.commit()
+    return {"status": "ok"}
