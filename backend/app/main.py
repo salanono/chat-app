@@ -8,6 +8,7 @@ from .db import Base, engine
 from .socket import sio  # ← さっきの AsyncServer を import
 from .auth import ensure_default_admin
 
+from . import models
 # ---- FastAPI 本体（REST 用） ----
 fastapi_app = FastAPI(title="Chat Support Backend")
 
