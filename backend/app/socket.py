@@ -12,8 +12,6 @@ sio = socketio.AsyncServer(
     cors_allowed_origins="*",
 )
 
-# ここでは ASGIApp は作らない！
-
 
 @sio.event
 async def connect(sid, environ):
@@ -53,7 +51,8 @@ async def visitor_message(sid, data):
     async with AsyncSessionLocal() as db:
         msg = models.Message(
             session_id=session_uuid,
-            sender_type="visitor",
+            # ★ ここを文字列 → Enum に
+            sender_type=models.SenderType.VISITOR,
             content=content,
             created_at=datetime.utcnow(),
         )
@@ -71,7 +70,10 @@ async def visitor_message(sid, data):
         payload = {
             "id": str(msg.id),
             "session_id": str(msg.session_id),
-            "sender_type": msg.sender_type,
+            # ★ フロント用には小文字を渡す
+            "sender_type": msg.sender_type.value.lower()
+            if hasattr(msg.sender_type, "value")
+            else str(msg.sender_type).lower(),
             "content": msg.content,
             "created_at": msg.created_at.isoformat(),
         }
@@ -95,7 +97,8 @@ async def operator_message(sid, data):
     async with AsyncSessionLocal() as db:
         msg = models.Message(
             session_id=session_uuid,
-            sender_type="operator",
+            # ★ ここも Enum
+            sender_type=models.SenderType.OPERATOR,
             content=content,
             created_at=datetime.utcnow(),
         )
@@ -113,7 +116,9 @@ async def operator_message(sid, data):
         payload = {
             "id": str(msg.id),
             "session_id": str(msg.session_id),
-            "sender_type": msg.sender_type,
+            "sender_type": msg.sender_type.value.lower()
+            if hasattr(msg.sender_type, "value")
+            else str(msg.sender_type).lower(),
             "content": msg.content,
             "created_at": msg.created_at.isoformat(),
         }

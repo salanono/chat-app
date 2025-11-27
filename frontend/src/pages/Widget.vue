@@ -25,7 +25,7 @@ const createVisitorIdentifier = () => {
 // ---- セッション作成 or 取得 ----
 const fetchOrCreateSession = async () => {
   const visitor_identifier = createVisitorIdentifier();
-  const res = await fetch(`${API_BASE}/api/sessions`, {
+  const res = await fetch(`${API_BASE}/api/widget/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ visitor_identifier }),
@@ -38,7 +38,7 @@ const fetchOrCreateSession = async () => {
 const loadHistory = async () => {
   if (!sessionId.value) return;
   const res = await fetch(
-    `${API_BASE}/api/sessions/${sessionId.value}/messages`
+    `${API_BASE}/api/widget/sessions/${sessionId.value}/messages`
   );
   const data = await res.json();
   messages.value = data;
@@ -116,9 +116,13 @@ onBeforeUnmount(() => {
 const formatTime = (isoString) => {
   if (!isoString) return "";
 
-  // サーバから来る "2025-11-26T06:20:00" みたいな文字列を
-  // 「UTCとして解釈 → ローカル時刻(JST)表示」に補正
-  const fixed = isoString.endsWith("Z") ? isoString : isoString + "Z";
+  // 1) サーバから来る "2025-11-27T06:55:00.123456" に
+  //    タイムゾーンがなければ「UTC」として Z を足す
+  const fixed = isoString.match(/(Z|[+-]\d\d:\d\d)$/)
+    ? isoString // すでにタイムゾーン付き
+    : isoString + "Z"; // UTC 扱い
+
+  // 2) Date に食わせると、ローカルタイム(JST)に自動変換される
   const d = new Date(fixed);
 
   return d.toLocaleTimeString("ja-JP", {

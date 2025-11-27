@@ -327,3 +327,120 @@ async def post_message(
         "attachment_url": msg.attachment_url,
         "created_at": msg.created_at.isoformat(),
     }
+
+# =============================
+# ウィジェット用: セッション作成 or 取得
+# POST /api/widget/sessions
+# =============================
+@router.post("/widget/sessions")
+async def widget_create_or_get_session(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    body:
+    {
+      "visitor_identifier": "visitor_xxx",
+      "visitor_name": "Foo"   // 任意
+    }
+
+    owner_user は「最初の ADMIN ユーザー」を自動的に紐づける
+    """
+    visitor_identifier = payload.get("visitor_identifier")
+    visitor_name = payload.get("visitor_name")
+
+    if not visitor_identifier:
+        raise HTTPException(
+            status_code=400,
+            detail="visitor_identifier は必須です",
+        )
+
+    # ★ デフォルトのオーナー（最初の ADMIN）
+    result_user = await db.execute(
+        select(models.User).where(models.User.role == models.UserRole.ADMIN)
+    )
+    owner = result_user.scalars().first()
+    if not owner:
+        raise HTTPException(
+            status_code=500,
+            detail="ADMIN ユーザーが存在しません",
+        )
+
+    # 同じ visitor_identifier & owner_user_id で OPEN を再利用
+    result_session = await db.execute(
+        select(models.Session).where(
+            models.Session.visitor_identifier == visitor_identifier,
+            models.Session.owner_user_id == owner.id,
+            models.Session.status == models.SessionStatus.OPEN,
+        )
+    )
+    session = result_session.scalars().first()
+
+    now = datetime.utcnow()
+
+    if not session:
+        session = models.Session(
+            visitor_identifier=visitor_identifier,
+            visitor_name=visitor_name,
+            status=models.SessionStatus.OPEN,
+            created_at=now,
+            last_active_at=now,
+            owner_user_id=owner.id,
+            company_id=owner.company_id,
+        )
+        db.add(session)
+        await db.commit()
+        await db.refresh(session)
+    else:
+        session.last_active_at = now
+        if visitor_name and not session.visitor_name:
+            session.visitor_name = visitor_name
+        await db.commit()
+        await db.refresh(session)
+
+    return {"id": str(session.id)}
+
+
+# =============================
+# ウィジェット用: セッションのメッセージ一覧
+# GET /api/widget/sessions/{session_id}/messages
+# =============================
+@router.get("/widget/sessions/{session_id}/messages")
+async def widget_get_messages(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id が不正です")
+
+    # セッションが存在するかだけ確認（会社・ユーザー制御はここではしない）
+    result_session = await db.execute(
+        select(models.Session).where(models.Session.id == session_uuid)
+    )
+    session = result_session.scalars().first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    result_msg = await db.execute(
+        select(models.Message)
+        .where(models.Message.session_id == session.id)
+        .order_by(models.Message.created_at.asc())
+    )
+    messages = result_msg.scalars().all()
+
+    return [
+        {
+            "id": m.id,
+            "session_id": str(m.session_id),
+            "sender_type": m.sender_type.value
+            if hasattr(m.sender_type, "value")
+            else str(m.sender_type),
+            "sender_id": m.sender_id,
+            "content": m.content,
+            "attachment_url": m.attachment_url,
+            "created_at": m.created_at.isoformat(),
+        }
+        for m in messages
+    ]
