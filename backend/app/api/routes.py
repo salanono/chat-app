@@ -1,10 +1,11 @@
 # backend/app/api/routes.py
 from datetime import datetime
 from uuid import UUID
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -17,6 +18,40 @@ from ..auth import (
 from ..db import get_db
 
 router = APIRouter(prefix="/api")
+
+# -----------------------------
+# 埋め込み用 API キー取得（なければ自動発行）
+# GET /api/embed-key
+# -----------------------------
+@router.get("/embed-key")
+async def get_or_create_embed_key(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    # 既存の有効なキーを探す
+    result = await db.execute(
+        select(models.ApiKey).where(
+            models.ApiKey.user_id == current_user.id,
+            models.ApiKey.company_id == current_user.company_id,
+            models.ApiKey.is_active.is_(True),
+        )
+    )
+    api_key = result.scalars().first()
+
+    # なければ新しく発行
+    if not api_key:
+        key_str = secrets.token_hex(32)  # 64文字のランダムキー
+        api_key = models.ApiKey(
+            key=key_str,
+            user_id=current_user.id,
+            company_id=current_user.company_id,
+            is_active=True,
+        )
+        db.add(api_key)
+        await db.commit()
+        await db.refresh(api_key)
+
+    return {"api_key": api_key.key}
 
 # -----------------------------
 # 認証: 新規登録
@@ -129,34 +164,72 @@ async def create_or_get_session(
     body:
     {
       "visitor_identifier": "visitor_xxx",
-      "owner_id": 1,          // 管理画面ユーザーID (int)
+      // どちらか一方を指定:
+      // "owner_id": 1,
+      // "api_key": "xxxxx",
       "visitor_name": "Foo"   // 任意
     }
     """
     visitor_identifier = payload.get("visitor_identifier")
     owner_id = payload.get("owner_id")
+    api_key = payload.get("api_key")
     visitor_name = payload.get("visitor_name")
 
-    print("[/api/sessions] payload =", payload)
-
-    if not visitor_identifier or owner_id is None:
+    if not visitor_identifier:
         raise HTTPException(
             status_code=400,
-            detail="visitor_identifier と owner_id は必須です",
+            detail="visitor_identifier は必須です",
         )
 
-    try:
-        owner_id_int = int(owner_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="owner_id が不正です")
+    # --- owner を決めるロジック ---
+    owner = None
 
-    result_user = await db.execute(
-        select(models.User).where(models.User.id == owner_id_int)
-    )
-    owner = result_user.scalars().first()
-    if not owner:
-        raise HTTPException(status_code=404, detail="owner user not found")
+    # ① api_key があればそちらを優先
+    if api_key:
+        result_api = await db.execute(
+            select(models.ApiKey).where(
+                models.ApiKey.key == api_key,
+                models.ApiKey.is_active.is_(True),
+            )
+        )
+        api_obj = result_api.scalars().first()
+        if not api_obj:
+            raise HTTPException(
+                status_code=400,
+                detail="api_key が不正か無効です",
+            )
 
+        result_user = await db.execute(
+            select(models.User).where(models.User.id == api_obj.user_id)
+        )
+        owner = result_user.scalars().first()
+        if not owner:
+            raise HTTPException(
+                status_code=400,
+                detail="api_key に紐づくユーザーが存在しません",
+            )
+
+    # ② api_key が無い場合は owner_id を使う
+    else:
+        if owner_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="owner_id または api_key を指定してください",
+            )
+
+        try:
+            owner_id_int = int(owner_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="owner_id が不正です")
+
+        result_user = await db.execute(
+            select(models.User).where(models.User.id == owner_id_int)
+        )
+        owner = result_user.scalars().first()
+        if not owner:
+            raise HTTPException(status_code=404, detail="owner user not found")
+
+    # ここまで来たら owner は必ず存在する
     result_session = await db.execute(
         select(models.Session).where(
             models.Session.visitor_identifier == visitor_identifier,

@@ -11,9 +11,10 @@ const sessionId = ref(null);
 const isConnected = ref(false);
 const isOpen = ref(true); // ウィジェットの開閉
 
-// URL から owner_id を取得（埋め込みスクリプトごとに違うやつ）
+// URL から owner_id / api_key を取得
 const url = new URL(window.location.href);
-const ownerId = url.searchParams.get("owner_id"); // 文字列として取れる
+const ownerId = url.searchParams.get("owner_id"); // 旧: 数字を直接指定する場合
+const apiKey = url.searchParams.get("api_key"); // 新: 安全な API キー方式
 
 // ---- visitor_identifier を localStorage で管理 ----
 const createVisitorIdentifier = () => {
@@ -32,8 +33,20 @@ const fetchOrCreateSession = async () => {
 
   const payload = {
     visitor_identifier,
-    owner_id: ownerId,
   };
+
+  // api_key があれば優先してそちらを使う
+  if (apiKey) {
+    payload.api_key = apiKey;
+  } else if (ownerId) {
+    // 互換性のため owner_id もまだサポートしておく
+    payload.owner_id = ownerId;
+  } else {
+    console.error(
+      "[widget] owner_id も api_key も指定されていません。セッションを作れません。"
+    );
+    return;
+  }
 
   console.log("[widget] create session payload:", payload);
 
@@ -529,7 +542,7 @@ const normalizeSenderType = (raw) => {
 
 /* メッセージが追加されたときのふわっとアニメーション */
 .msg-enter-active {
-  transition: all 0.16s.ease-out;
+  transition: all 0.16s ease-out;
 }
 
 .msg-enter-from {
