@@ -2,7 +2,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -136,6 +136,8 @@ async def create_or_get_session(
     visitor_identifier = payload.get("visitor_identifier")
     owner_id = payload.get("owner_id")
     visitor_name = payload.get("visitor_name")
+
+    print("[/api/sessions] payload =", payload)
 
     if not visitor_identifier or owner_id is None:
         raise HTTPException(
@@ -381,12 +383,15 @@ async def widget_create_or_get_session(
     body:
     {
       "visitor_identifier": "visitor_xxx",
-      "visitor_name": "Foo"   // 任意
+      "owner_id": 2,              # 任意: 管理画面側の user.id
+      "visitor_name": "Foo"       # 任意
     }
 
-    owner_user は「最初の ADMIN ユーザー」を自動的に紐づける
+    owner_id が指定されていればそのユーザーに紐づける。
+    指定されていなければ「最初の ADMIN ユーザー」に紐づける（従来動作）。
     """
     visitor_identifier = payload.get("visitor_identifier")
+    owner_id_raw = payload.get("owner_id")
     visitor_name = payload.get("visitor_name")
 
     if not visitor_identifier:
@@ -395,16 +400,39 @@ async def widget_create_or_get_session(
             detail="visitor_identifier は必須です",
         )
 
-    # ★ デフォルトのオーナー（最初の ADMIN）
-    result_user = await db.execute(
-        select(models.User).where(models.User.role == models.UserRole.ADMIN)
-    )
-    owner = result_user.scalars().first()
-    if not owner:
-        raise HTTPException(
-            status_code=500,
-            detail="ADMIN ユーザーが存在しません",
+    # --- owner を決める ---
+    # 1) owner_id が来ていればそれを優先
+    # 2) なければ最初の ADMIN ユーザーを使う（従来の挙動）
+    owner = None
+    if owner_id_raw is not None:
+        try:
+            owner_id_int = int(owner_id_raw)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="owner_id が不正です",
+            )
+
+        result_user = await db.execute(
+            select(models.User).where(models.User.id == owner_id_int)
         )
+        owner = result_user.scalars().first()
+        if not owner:
+            raise HTTPException(
+                status_code=404,
+                detail="指定された owner ユーザーが存在しません",
+            )
+    else:
+        # ★ フォールバック: 最初の ADMIN を使う
+        result_user = await db.execute(
+            select(models.User).where(models.User.role == models.UserRole.ADMIN)
+        )
+        owner = result_user.scalars().first()
+        if not owner:
+            raise HTTPException(
+                status_code=500,
+                detail="ADMIN ユーザーが存在しません",
+            )
 
     # 同じ visitor_identifier & owner_user_id で OPEN を再利用
     result_session = await db.execute(
@@ -426,7 +454,7 @@ async def widget_create_or_get_session(
             created_at=now,
             last_active_at=now,
             owner_user_id=owner.id,
-            company_id=owner.company_id,
+            company_id=owner.company_id,  # owner の会社に紐づけ
         )
         db.add(session)
         await db.commit()
@@ -439,7 +467,6 @@ async def widget_create_or_get_session(
         await db.refresh(session)
 
     return {"id": str(session.id)}
-
 
 # =============================
 # ウィジェット用: セッションのメッセージ一覧
@@ -512,3 +539,48 @@ async def close_session(
     session.status = models.SessionStatus.CLOSED
     await db.commit()
     return {"status": "ok"}
+
+@router.get("/embed/{owner_id}.js")
+async def get_embed_script(owner_id: int):
+    """
+    会社ごとに変えたい「埋め込みスクリプト」を返すエンドポイント。
+    例:
+      <script src="http://localhost:8000/api/embed/1.js" async></script>
+
+    owner_id ごとに iframe の URL に owner_id を埋め込んでいる。
+    """
+    js = f"""
+    (function() {{
+      var d = document;
+
+      function init() {{
+        // すでに iframe があれば何もしない
+        if (d.getElementById('chat-widget-frame')) return;
+
+        // iframe を作成
+        var iframe = d.createElement('iframe');
+        iframe.id = 'chat-widget-frame';
+        iframe.src = 'http://localhost:5173/widget?owner_id={owner_id}';
+        iframe.style.position = 'fixed';
+        iframe.style.bottom = '20px';
+        iframe.style.right = '20px';
+        iframe.style.width = '360px';
+        iframe.style.height = '520px';
+        iframe.style.border = 'none';
+        iframe.style.zIndex = '999999';
+        iframe.style.borderRadius = '16px';
+        iframe.style.boxShadow = '0 10px 30px rgba(15,23,42,0.25)';
+        iframe.allow = 'clipboard-read; clipboard-write';
+
+        d.body.appendChild(iframe);
+      }}
+
+      if (d.readyState === 'complete' || d.readyState === 'interactive') {{
+        init();
+      }} else {{
+        d.addEventListener('DOMContentLoaded', init);
+      }}
+    }})();
+    """.strip()
+
+    return Response(content=js, media_type="application/javascript")

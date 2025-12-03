@@ -11,6 +11,10 @@ const sessionId = ref(null);
 const isConnected = ref(false);
 const isOpen = ref(true); // ウィジェットの開閉
 
+// URL から owner_id を取得（埋め込みスクリプトごとに違うやつ）
+const url = new URL(window.location.href);
+const ownerId = url.searchParams.get("owner_id"); // 文字列として取れる
+
 // ---- visitor_identifier を localStorage で管理 ----
 const createVisitorIdentifier = () => {
   const key = "chat_visitor_id";
@@ -25,13 +29,33 @@ const createVisitorIdentifier = () => {
 // ---- セッション作成 or 取得 ----
 const fetchOrCreateSession = async () => {
   const visitor_identifier = createVisitorIdentifier();
-  const res = await fetch(`${API_BASE}/api/widget/sessions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ visitor_identifier }),
-  });
-  const data = await res.json();
-  sessionId.value = data.id;
+
+  const payload = {
+    visitor_identifier,
+    owner_id: ownerId,
+  };
+
+  console.log("[widget] create session payload:", payload);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await res.json();
+    console.log("[widget] create session response:", data);
+
+    if (!res.ok) {
+      console.error("セッション作成に失敗しました", data);
+      return;
+    }
+
+    sessionId.value = data.id;
+  } catch (e) {
+    console.error("セッション作成でエラー:", e);
+  }
 };
 
 // ---- 過去メッセージ取得 ----
@@ -69,10 +93,13 @@ const connectSocket = () => {
     isConnected.value = true;
     console.log("[widget] socket connected", socket.value.id);
 
-    socket.value.emit("join_session", {
-      session_id: sessionId.value,
-      role: "visitor",
-    });
+    // セッションの room に join
+    if (sessionId.value) {
+      socket.value.emit("join_session", {
+        session_id: sessionId.value,
+        role: "visitor",
+      });
+    }
   });
 
   socket.value.on("disconnect", () => {
@@ -111,7 +138,7 @@ const toggleOpen = () => {
 };
 
 onMounted(async () => {
-  await fetchOrCreateSession();
+  await fetchOrCreateSession(); // owner_id 付きでセッション作成
   await loadHistory();
   connectSocket();
 });
@@ -502,7 +529,7 @@ const normalizeSenderType = (raw) => {
 
 /* メッセージが追加されたときのふわっとアニメーション */
 .msg-enter-active {
-  transition: all 0.16s ease-out;
+  transition: all 0.16s.ease-out;
 }
 
 .msg-enter-from {

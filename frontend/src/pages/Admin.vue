@@ -4,6 +4,17 @@
     <!-- ヘッダー -->
     <header class="admin-header">
       <h1>管理画面</h1>
+      <div
+        v-if="currentUser"
+        style="
+          font-size: 12px;
+          margin-right: auto;
+          margin-left: 16px;
+          color: #0f172a;
+        "
+      >
+        user_id: {{ currentUser.id }} / company_id: {{ currentUser.company_id }}
+      </div>
       <button class="logout-btn" @click="logout">ログアウト</button>
     </header>
 
@@ -166,6 +177,20 @@ const isConnected = ref(false);
 // ★ クローズ非表示フラグ
 const hideClosed = ref(false);
 
+const currentUser = ref(null);
+
+const fetchMe = async () => {
+  const token = localStorage.getItem("admin_token");
+  if (!token) return;
+
+  const res = await fetch(`${API_BASE}/api/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) return;
+
+  currentUser.value = await res.json();
+};
 // ---- 共通の時刻フォーマット（JST） ----
 const formatTime = (isoString) => {
   if (!isoString) return "";
@@ -411,6 +436,7 @@ const logout = () => {
 onMounted(() => {
   connectSocket();
   fetchSessions();
+  fetchMe();
 });
 
 onBeforeUnmount(() => {
