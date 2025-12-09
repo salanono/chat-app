@@ -3,18 +3,10 @@
   <div class="admin-layout">
     <!-- ヘッダー -->
     <header class="admin-header">
-      <h1>管理画面</h1>
-      <div
-        v-if="currentUser"
-        style="
-          font-size: 12px;
-          margin-right: auto;
-          margin-left: 16px;
-          color: #0f172a;
-        "
-      >
-        user_id: {{ currentUser.id }} / company_id: {{ currentUser.company_id }}
-      </div>
+      <h1>
+        管理画面
+        <span v-if="companyName">{{ companyName }}</span>
+      </h1>
       <button class="logout-btn" @click="logout">ログアウト</button>
     </header>
 
@@ -170,11 +162,10 @@ const selectedSessionName = ref("");
 
 const messages = ref([]);
 const inputText = ref("");
-
+const companyName = ref("");
 const socket = ref(null);
 const isConnected = ref(false);
 
-// ★ クローズ非表示フラグ
 const hideClosed = ref(false);
 
 const currentUser = ref(null);
@@ -242,6 +233,33 @@ const filteredSessions = computed(() => {
     return tB - tA;
   });
 });
+
+// ---- 会社情報取得 ----
+const fetchCompany = async () => {
+  const token = localStorage.getItem("admin_token");
+  if (!token) {
+    router.push("/admin/login");
+    return;
+  }
+
+  const res = await fetch(`${API_BASE}/api/company/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (res.status === 401) {
+    localStorage.removeItem("admin_token");
+    router.push("/admin/login");
+    return;
+  }
+
+  if (!res.ok) {
+    console.error("会社情報の取得に失敗しました");
+    return;
+  }
+
+  const data = await res.json();
+  companyName.value = data.name || "";
+};
 
 // ---- セッション一覧取得 ----
 const fetchSessions = async () => {
@@ -436,6 +454,7 @@ const logout = () => {
 onMounted(() => {
   connectSocket();
   fetchSessions();
+  fetchCompany();
   fetchMe();
 });
 

@@ -150,6 +150,30 @@ async def login(payload: schemas.LoginRequest, db: AsyncSession = Depends(get_db
 async def get_me(current_user: models.User = Depends(get_current_user)):
     return schemas.UserOut.model_validate(current_user)
 
+# -----------------------------
+# 自分の所属会社情報取得
+# GET /api/company/me
+# -----------------------------
+@router.get("/company/me")
+async def get_my_company(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    # company_id が無い場合
+    if not current_user.company_id:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    result = await db.execute(
+        select(models.Company).where(models.Company.id == current_user.company_id)
+    )
+    company = result.scalars().first()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    return {
+        "id": company.id,
+        "name": company.name,
+    }
 
 # -----------------------------
 # ウィジェット用: セッション作成 or 取得

@@ -315,7 +315,10 @@ const normalizeSenderType = (raw) => {
 
 .widget {
   width: 360px;
+
   height: 480px;
+  max-height: calc(100vh - 80px);
+
   background: #ffffff;
   border-radius: 18px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
