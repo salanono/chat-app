@@ -1,46 +1,38 @@
 # backend/app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from .api.routes import router as core_router
+from .api import routes_upload  # ★ 追加
+from .socket import sio
 import socketio
 
-from .api.routes import router as api_router
-from .db import Base, engine
-from .socket import sio  # ← さっきの AsyncServer を import
-from .auth import ensure_default_admin
-
-from . import models
-# ---- FastAPI 本体（REST 用） ----
-fastapi_app = FastAPI(title="Chat Support Backend")
-
-origins = [
-    "http://localhost:5173",
-]
+# ① FastAPI 本体
+fastapi_app = FastAPI()
 
 fastapi_app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-fastapi_app.include_router(api_router)
+# 既存 API
+fastapi_app.include_router(core_router)
 
+# 画像アップロード用 API を /api 配下に生やす
+fastapi_app.include_router(routes_upload.router)
 
-@fastapi_app.get("/health")
-async def health():
-  return {"status": "ok"}
+# 画像配信用の静的ファイル
+# アップロードされたファイルを配信する
+fastapi_app.mount(
+    "/uploads",
+    StaticFiles(directory="/app/uploads"),
+    name="uploads",
+)
 
-
-@fastapi_app.on_event("startup")
-async def on_startup():
-    # 起動時にテーブル自動作成
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await ensure_default_admin()
-
-# ---- FastAPI + Socket.IO を合体させた ASGI アプリ ----
-# socketio_path="ws/socket.io" → クライアント側は path: "/ws/socket.io"
 app = socketio.ASGIApp(
     sio,
     other_asgi_app=fastapi_app,

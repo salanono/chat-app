@@ -27,18 +27,17 @@ async def disconnect(sid):
 async def join_session(sid, data):
     """
     data: { "session_id": "...", "role": "operator" or "visitor" }
-
-    - session_id があれば、そのセッション専用 room に参加
-    - role が "operator" なら、共通 room "operators" にも参加
     """
     session_id = data.get("session_id")
     role = data.get("role")
 
-    # ★ session_id があるときだけ、そのセッションの room に入る
-    if session_id:
-        await sio.enter_room(sid, str(session_id))
+    if not session_id:
+        return
 
-    # ★ オペレーターは必ず共通 room "operators" に参加させる
+    # セッションごとの room に参加
+    await sio.enter_room(sid, str(session_id))
+
+    # ★ オペレーターは共通 room "operators" にも入れる
     if role and role.lower() == "operator":
         await sio.enter_room(sid, "operators")
 
@@ -47,13 +46,22 @@ async def join_session(sid, data):
 
 @sio.event
 async def visitor_message(sid, data):
+    print("[socket] visitor_message received:", data)  # ★ まずここで絶対ログ出す
+
     """
-    data: { "session_id": "uuid-string", "content": "text..." }
+    data: {
+      "session_id": "uuid-string",
+      "content": "text...",
+      "attachment_url": "http://.../xxx.png"
+    }
     """
     session_id_str = data.get("session_id")
-    content = data.get("content", "")
+    content = data.get("content", "") or ""
+    attachment_url = data.get("attachment_url")
 
-    if not session_id_str or not content:
+    # ★ 両方カラだったら捨てる
+    if not session_id_str or (not content and not attachment_url):
+        print("[socket] visitor_message: empty content & attachment_url, skip")
         return
 
     session_uuid = uuid.UUID(session_id_str)
@@ -63,13 +71,13 @@ async def visitor_message(sid, data):
             session_id=session_uuid,
             sender_type=models.SenderType.VISITOR,
             content=content,
+            attachment_url=attachment_url,  # ★ ここ超重要
             created_at=datetime.utcnow(),
             is_read=False,
             read_at=None,
         )
         db.add(msg)
 
-        # セッションの最終アクティブ時間を更新 & クローズでも OPEN に戻す
         await db.execute(
             models.Session.__table__.update()
             .where(models.Session.id == session_uuid)
@@ -85,34 +93,32 @@ async def visitor_message(sid, data):
         payload = {
             "id": str(msg.id),
             "session_id": str(msg.session_id),
-            # フロント用には小文字で渡す（"visitor"）
-            "sender_type": (
-                msg.sender_type.value.lower()
-                if hasattr(msg.sender_type, "value")
-                else str(msg.sender_type).lower()
-            ),
+            "sender_type": msg.sender_type.value.lower()
+            if hasattr(msg.sender_type, "value")
+            else str(msg.sender_type).lower(),
             "content": msg.content,
+            "attachment_url": msg.attachment_url,  # ★ ここも大事（フロントに返す）
             "created_at": msg.created_at.isoformat(),
         }
 
-        # ★ そのセッションの room へ
         await sio.emit("new_message", payload, room=session_id_str)
-
-        # ★ さらに、全オペレーターがいる "operators" ルームへも送る
-        #    → Admin.vue 側の `new_message` ハンドラで、該当セッションが
-        #       なければ `fetchSessions()` してくれるので、新規セッションも反映される
         await sio.emit("new_message", payload, room="operators")
-
 
 @sio.event
 async def operator_message(sid, data):
     """
-    data: { "session_id": "uuid-string", "content": "text..." }
+    data: {
+      "session_id": "uuid-string",
+      "content": "text...",         // 任意
+      "attachment_url": "/uploads/xxx.png"  // 任意
+    }
     """
     session_id_str = data.get("session_id")
-    content = data.get("content", "")
+    content = (data.get("content") or "").strip()
+    attachment_url = data.get("attachment_url")
 
-    if not session_id_str or not content:
+    # ★ テキストも画像も両方空なら無視
+    if not session_id_str or (not content and not attachment_url):
         return
 
     session_uuid = uuid.UUID(session_id_str)
@@ -122,6 +128,7 @@ async def operator_message(sid, data):
             session_id=session_uuid,
             sender_type=models.SenderType.OPERATOR,
             content=content,
+            attachment_url=attachment_url,
             created_at=datetime.utcnow(),
             is_read=True,
             read_at=datetime.utcnow(),
@@ -142,16 +149,14 @@ async def operator_message(sid, data):
             "id": str(msg.id),
             "session_id": str(msg.session_id),
             # フロント用に小文字で渡す（"operator"）
-            "sender_type": (
-                msg.sender_type.value.lower()
-                if hasattr(msg.sender_type, "value")
-                else str(msg.sender_type).lower()
-            ),
+            "sender_type": msg.sender_type.value.lower()
+            if hasattr(msg.sender_type, "value")
+            else str(msg.sender_type).lower(),
             "content": msg.content,
+            "attachment_url": msg.attachment_url,
             "created_at": msg.created_at.isoformat(),
         }
 
         # オペレーター・ビジター双方に配信
         await sio.emit("new_message", payload, room=session_id_str)
-        # 必要であれば、他のオペレーターにも通知したいのであれば以下も有効のままでOK
         await sio.emit("new_message", payload, room="operators")

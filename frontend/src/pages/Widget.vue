@@ -13,8 +13,8 @@ const isOpen = ref(true); // ウィジェットの開閉
 
 // URL から owner_id / api_key を取得
 const url = new URL(window.location.href);
-const ownerId = url.searchParams.get("owner_id"); // 旧: 数字を直接指定する場合
-const apiKey = url.searchParams.get("api_key"); // 新: 安全な API キー方式
+const ownerId = url.searchParams.get("owner_id");
+const apiKey = url.searchParams.get("api_key");
 
 // ---- visitor_identifier を localStorage で管理 ----
 const createVisitorIdentifier = () => {
@@ -31,24 +31,24 @@ const createVisitorIdentifier = () => {
 const fetchOrCreateSession = async () => {
   const visitor_identifier = createVisitorIdentifier();
 
-  const payload = {
-    visitor_identifier,
-  };
+  // owner_id or api_key のどちらかを payload に入れる
+  const payload = { visitor_identifier };
 
-  // api_key があれば優先してそちらを使う
   if (apiKey) {
     payload.api_key = apiKey;
   } else if (ownerId) {
-    // 互換性のため owner_id もまだサポートしておく
     payload.owner_id = ownerId;
-  } else {
-    console.error(
-      "[widget] owner_id も api_key も指定されていません。セッションを作れません。"
-    );
-    return;
   }
 
   console.log("[widget] create session payload:", payload);
+
+  // どちらも無ければエラーにしておく（デバッグ用）
+  if (!payload.api_key && !payload.owner_id) {
+    console.error(
+      "[widget] URL に owner_id も api_key もありません。?api_key=... か ?owner_id=... を付けてください"
+    );
+    return;
+  }
 
   try {
     const res = await fetch(`${API_BASE}/api/sessions`, {
@@ -132,7 +132,7 @@ const connectSocket = () => {
   });
 };
 
-// ---- メッセージ送信 ----
+// ---- メッセージ送信（テキスト） ----
 const sendMessage = () => {
   const text = inputText.value.trim();
   if (!text || !socket.value || !isConnected.value) return;
@@ -140,9 +140,111 @@ const sendMessage = () => {
   socket.value.emit("visitor_message", {
     session_id: sessionId.value,
     content: text,
+    attachment_url: null,
   });
 
   inputText.value = "";
+};
+
+const handleFileButtonClick = () => {
+  if (!fileInputRef.value) return;
+
+  // 同じファイルを2回連続で選んでも change が発火するように
+  fileInputRef.value.value = "";
+
+  // ファイル選択ダイアログを開く
+  fileInputRef.value.click();
+};
+
+const handleFileChange = (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  console.log("[widget] selected file:", file);
+  // このあとでアップロード処理を足していく
+};
+
+// すでにあるやつの下あたりに追記（or置き換え）
+const fileInput = ref(null);
+
+const openFilePicker = () => {
+  fileInput.value?.click();
+};
+
+const onFileChange = async (e) => {
+  const file = e.target.files?.[0];
+  console.log("[widget] onFileChange, selected file:", file);
+
+  if (!file) return;
+
+  try {
+    await uploadImage(file);
+  } catch (err) {
+    console.error("[widget] uploadImage error:", err);
+  } finally {
+    // 同じファイルを連続で選べるようにリセット
+    e.target.value = "";
+  }
+};
+
+const uploadImage = async (file) => {
+  console.log("[widget] uploadImage start:", file);
+
+  const form = new FormData();
+  form.append("file", file);
+
+  const res = await fetch(`${API_BASE}/api/upload`, {
+    method: "POST",
+    body: form,
+  });
+
+  console.log("[widget] upload response status:", res.status);
+
+  if (!res.ok) {
+    console.error("[widget] upload failed:", await res.text());
+    return;
+  }
+
+  const data = await res.json();
+  console.log("[widget] uploadImage response json:", data);
+
+  if (!data.url) {
+    console.error("[widget] uploadImage: no url in response");
+    return;
+  }
+
+  if (!socket.value || !isConnected.value) {
+    console.error("[widget] socket not ready", {
+      socket: !!socket.value,
+      isConnected: isConnected.value,
+    });
+    return;
+  }
+
+  if (!sessionId.value) {
+    console.error("[widget] no sessionId, cannot send message");
+    return;
+  }
+
+  // ★ ここが一番大事：画像のURL付きで visitor_message を emit
+  const payload = {
+    session_id: sessionId.value,
+    content: "", // テキスト無し
+    attachment_url: data.url, // 画像URL
+  };
+  console.log("[widget] emit visitor_message with payload:", payload);
+
+  socket.value.emit("visitor_message", payload);
+};
+
+const previewImageUrl = ref(null); // 画像拡大用
+
+const openImagePreview = (url) => {
+  previewImageUrl.value = url;
+};
+
+const closeImagePreview = () => {
+  previewImageUrl.value = null;
 };
 
 // ---- 開閉 ----
@@ -226,6 +328,7 @@ const normalizeSenderType = (raw) => {
           </header>
 
           <!-- メッセージ一覧 -->
+
           <main class="widget__messages">
             <transition-group name="msg" tag="div">
               <div
@@ -235,9 +338,25 @@ const normalizeSenderType = (raw) => {
                 :class="m.sender_type === 'visitor' ? 'msg--me' : 'msg--other'"
               >
                 <div class="msg__inner">
-                  <div class="msg__bubble">
+                  <!-- ⭐ 画像メッセージ（枠なし・クリックで拡大） -->
+                  <div
+                    v-if="m.attachment_url"
+                    class="msg__image-wrapper"
+                    @click="openImagePreview(API_BASE + m.attachment_url)"
+                  >
+                    <img
+                      :src="API_BASE + m.attachment_url"
+                      alt="添付画像"
+                      class="msg-image"
+                    />
+                  </div>
+
+                  <!-- ⭐ テキストメッセージ -->
+                  <div v-else class="msg__bubble">
                     <p class="msg__text">{{ m.content }}</p>
                   </div>
+
+                  <!-- 時刻 -->
                   <div class="msg__time">
                     {{ formatTime(m.created_at) }}
                   </div>
@@ -255,6 +374,19 @@ const normalizeSenderType = (raw) => {
 
           <!-- 入力エリア -->
           <footer class="widget__footer">
+            <!-- 📷 画像アップロード用の隠し input（これだけでOK） -->
+            <input
+              ref="fileInput"
+              type="file"
+              accept="image/*"
+              style="display: none"
+              @change="onFileChange"
+            />
+
+            <!-- 📷 画像ボタン -->
+            <button class="widget__button" @click="openFilePicker">📷</button>
+
+            <!-- テキスト入力 -->
             <input
               v-model="inputText"
               type="text"
@@ -262,6 +394,8 @@ const normalizeSenderType = (raw) => {
               placeholder="メッセージを入力して Enter で送信"
               @keyup.enter="sendMessage"
             />
+
+            <!-- 送信ボタン -->
             <button
               class="widget__button"
               @click="sendMessage"
@@ -273,6 +407,19 @@ const normalizeSenderType = (raw) => {
         </div>
       </div>
     </transition>
+    <!-- 🔍 画像プレビュー（モーダル） -->
+    <div
+      v-if="previewImageUrl"
+      class="image-preview"
+      @click.self="closeImagePreview"
+    >
+      <div class="image-preview__inner">
+        <img :src="previewImageUrl" alt="拡大画像" class="image-preview__img" />
+        <button class="image-preview__close" @click="closeImagePreview">
+          ✕
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -315,10 +462,8 @@ const normalizeSenderType = (raw) => {
 
 .widget {
   width: 360px;
-
   height: 480px;
   max-height: calc(100vh - 80px);
-
   background: #ffffff;
   border-radius: 18px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
@@ -473,6 +618,18 @@ const normalizeSenderType = (raw) => {
   line-height: 1.4;
 }
 
+/* 画像バブル内 */
+.msg__image-wrapper {
+  margin-top: 4px;
+}
+
+.msg__image {
+  max-width: 180px;
+  max-height: 180px;
+  border-radius: 10px;
+  display: block;
+}
+
 /* 時刻：バブルの外・下側に表示 */
 .msg__time {
   margin-top: 2px;
@@ -505,6 +662,31 @@ const normalizeSenderType = (raw) => {
   display: flex;
   gap: 8px;
   background: #ffffff;
+  align-items: center;
+}
+
+/* 隠しファイル入力 */
+.widget__file-input {
+  display: none;
+}
+
+/* 画像ボタン */
+.widget__icon-button {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: none;
+  background: #e0f2fe;
+  font-size: 16px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.widget__icon-button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .widget__input {
@@ -551,5 +733,82 @@ const normalizeSenderType = (raw) => {
 .msg-enter-from {
   opacity: 0;
   transform: translateY(4px) scale(0.98);
+}
+
+.msg-image {
+  max-width: 180px;
+  border-radius: 8px;
+}
+
+/* 画像バブル少し調整（角丸を少しだけ小さくしても良い） */
+.msg__bubble--image {
+  padding: 4px;
+}
+
+/* 画面全体のオーバーレイ */
+.image-preview {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999; /* iframe内で最前面に */
+}
+
+/* 中央のボックス */
+.image-preview__inner {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+}
+
+/* 拡大画像 */
+.image-preview__img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 14px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+}
+
+/* 閉じるボタン */
+.image-preview__close {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  border: none;
+  border-radius: 999px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  background: rgba(15, 23, 42, 0.9);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* 画像メッセージ用（枠なし・影なし） */
+.msg__image-wrapper {
+  max-width: 70%;
+  cursor: pointer;
+}
+
+.msg-image {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  display: block;
+  border: none !important;
+  background: none !important;
+  box-shadow: none !important;
+}
+
+/* 画像は右/左寄せになるようにコンテナも追従 */
+.msg--me .msg__image-wrapper {
+  margin-left: auto;
+}
+
+.msg--other .msg__image-wrapper {
+  margin-right: auto;
 }
 </style>

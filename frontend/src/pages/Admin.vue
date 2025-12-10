@@ -105,9 +105,24 @@
                 :class="m.sender_type === 'OPERATOR' ? 'msg--me' : 'msg--other'"
               >
                 <div class="msg__inner">
-                  <div class="msg__bubble">
+                  <!-- 画像付きメッセージ -->
+                  <div
+                    v-if="m.attachment_url"
+                    class="msg__image-wrapper"
+                    @click="openImagePreview(API_BASE + m.attachment_url)"
+                  >
+                    <img
+                      :src="API_BASE + m.attachment_url"
+                      alt="添付画像"
+                      class="msg-image"
+                    />
+                  </div>
+
+                  <!-- 通常テキストメッセージ -->
+                  <div v-else class="msg__bubble">
                     <p class="msg__text">{{ m.content }}</p>
                   </div>
+
                   <div class="msg__time">
                     {{ formatTime(m.created_at) }}
                   </div>
@@ -123,6 +138,25 @@
 
           <!-- 入力エリア -->
           <footer class="chat-panel__footer">
+            <!-- 📷 画像アップロードボタン -->
+            <button
+              type="button"
+              class="chat-panel__button chat-panel__button--icon"
+              @click="openFilePicker"
+            >
+              📷
+            </button>
+
+            <!-- 非表示のファイル input -->
+            <input
+              ref="fileInput"
+              type="file"
+              accept="image/*"
+              style="display: none"
+              @change="handleFileChange"
+            />
+
+            <!-- テキスト入力 -->
             <input
               v-model="inputText"
               type="text"
@@ -130,6 +164,8 @@
               placeholder="メッセージを入力して Enter で送信"
               @keyup.enter="sendMessage"
             />
+
+            <!-- 送信ボタン -->
             <button
               class="chat-panel__button"
               @click="sendMessage"
@@ -140,6 +176,18 @@
           </footer>
         </div>
       </main>
+    </div>
+  </div>
+  <!-- 🔍 画像プレビューモーダル -->
+  <div
+    v-if="previewImageUrl"
+    class="image-preview"
+    @click.self="closeImagePreview"
+  >
+    <div class="image-preview__inner">
+      <img :src="previewImageUrl" alt="preview" class="image-preview__img" />
+
+      <button class="image-preview__close" @click="closeImagePreview">✕</button>
     </div>
   </div>
 </template>
@@ -169,6 +217,74 @@ const isConnected = ref(false);
 const hideClosed = ref(false);
 
 const currentUser = ref(null);
+
+// 🔍 画像プレビュー用
+const previewImageUrl = ref(null);
+
+const openImagePreview = (url) => {
+  previewImageUrl.value = url;
+};
+
+const closeImagePreview = () => {
+  previewImageUrl.value = null;
+};
+
+const fileInput = ref(null); // 画像用 input
+
+const openFilePicker = () => {
+  if (fileInput.value) {
+    fileInput.value.click();
+  }
+};
+
+const handleFileChange = async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+
+  await uploadImage(file);
+
+  // 同じファイルを連続選択できるようにリセット
+  event.target.value = "";
+};
+
+const uploadImage = async (file) => {
+  if (!selectedSessionId.value) {
+    alert("先に左側でセッションを選択してください");
+    return;
+  }
+  if (!socket.value || !isConnected.value) {
+    alert("接続中ではありません");
+    return;
+  }
+
+  const form = new FormData();
+  form.append("file", file);
+
+  try {
+    const res = await fetch(`${API_BASE}/api/upload`, {
+      method: "POST",
+      body: form,
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || !data.url) {
+      console.error("upload error:", data);
+      alert("画像アップロードに失敗しました");
+      return;
+    }
+
+    // ✅ アップロード成功 → 画像付きメッセージとして送信
+    socket.value.emit("operator_message", {
+      session_id: selectedSessionId.value,
+      content: "", // テキストなし
+      attachment_url: data.url, // サーバーから返ってきた URL
+    });
+  } catch (e) {
+    console.error(e);
+    alert("画像アップロードでエラーが発生しました");
+  }
+};
 
 const fetchMe = async () => {
   const token = localStorage.getItem("admin_token");
@@ -910,7 +1026,84 @@ const displaySessionTitle = (s) => {
   border-radius: 999px;
   cursor: pointer;
 }
+
 .close-btn:hover {
   background: #3b82f6;
+}
+
+.chat-image {
+  max-width: 200px;
+  border-radius: 8px;
+}
+.msg__image-wrapper {
+  max-width: 70%;
+  cursor: pointer;
+}
+
+.msg-image {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  display: block;
+}
+
+/* 自分の画像は右寄せ */
+.msg--me .msg__image-wrapper {
+  margin-left: auto;
+}
+
+/* 相手の画像は左寄せ */
+.msg--other .msg__image-wrapper {
+  margin-right: auto;
+}
+
+/* 📷ボタンをちょい小さく */
+.chat-panel__button--icon {
+  padding-inline: 10px;
+}
+
+/* モーダル背景 */
+.image-preview {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+/* 内側コンテナ（少し余白を持たせる） */
+.image-preview__inner {
+  position: relative;
+  max-width: 80%; /* 90% → 80% にして少し小さく */
+  max-height: 80%;
+}
+
+/* 画像本体 */
+.image-preview__img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 10px;
+  display: block;
+}
+
+/* 閉じるボタン */
+.image-preview__close {
+  position: absolute;
+  top: 8px; /* -12px → 8px にして中に入れる */
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(15, 23, 42, 0.9);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 </style>

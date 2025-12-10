@@ -36,7 +36,8 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     display_name: str
-    company_name: str
+    # 会社名は任意にしておく（必要なら str にして必須にしてもOK）
+    company_name: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
@@ -86,8 +87,9 @@ class SessionSummary(BaseModel):
 
 # ---- Messages ----
 class MessageCreate(BaseModel):
+    # 管理画面から送る想定（テキスト必須なら str のままでOK）
     content: str
-    sender_type: str = "OPERATOR"  # 管理画面から送る想定
+    sender_type: str = "OPERATOR"
     attachment_url: Optional[str] = None
 
 
@@ -95,15 +97,9 @@ class MessageRead(BaseModel):
     id: int
     session_id: UUID
     sender_type: str
-    content: str
-    created_at: datetime
+    # 画像だけのメッセージも扱えるように Optional にしておく
+    content: Optional[str] = None
     attachment_url: Optional[str] = None
+    created_at: datetime
 
-    # ★ タイポ修正: from_attibutes → from_attributes
     model_config = ConfigDict(from_attributes=True)
-
-class RegisterRequest(BaseModel):
-    email: str
-    password: str
-    display_name: str
-    company_name: Optional[str] = None
