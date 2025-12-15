@@ -305,6 +305,7 @@ async def list_sessions(
         .where(
             models.Session.owner_user_id == current_user.id,
             models.Session.company_id == current_user.company_id,
+            models.Session.handoff_requested.is_(True),   # ← これ追加
         )
         .distinct()  # 同じセッションが複数メッセージで重複しないように
         .order_by(models.Session.last_active_at.desc())
@@ -636,6 +637,46 @@ async def close_session(
     session.status = models.SessionStatus.CLOSED
     await db.commit()
     return {"status": "ok"}
+
+@router.post("/widget/sessions/{session_id}/handoff")
+async def widget_request_handoff(
+    session_id: str,
+    api_key: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    # api_key 検証
+    q = await db.execute(
+        select(models.ApiKey).where(
+            models.ApiKey.key == api_key,
+            models.ApiKey.is_active.is_(True),
+        )
+    )
+    key = q.scalar_one_or_none()
+    if not key:
+        raise HTTPException(status_code=401, detail="invalid api_key")
+
+    # session 検証
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id が不正です")
+
+    q2 = await db.execute(select(models.Session).where(models.Session.id == session_uuid))
+    session = q2.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # ★ 会社一致チェック（これ超重要）
+    if session.company_id != key.company_id:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    now = datetime.utcnow()
+    session.handoff_requested = True
+    session.handoff_requested_at = now
+    session.last_active_at = now
+
+    await db.commit()
+    return {"ok": True}
 
 @router.get("/embed/{owner_id}.js")
 async def get_embed_script(owner_id: int):
@@ -1074,3 +1115,20 @@ async def rotate_api_key(
         "is_active": True,
         "created_at": new_key.created_at.isoformat() if new_key.created_at else None,
     }
+
+@router.post("/sessions/{session_id}/handoff")
+async def request_handoff(
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    q = await db.execute(select(models.Session).where(models.Session.id == session_id))
+    session = q.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session.handoff_requested = True
+    session.handoff_requested_at = datetime.utcnow()
+    session.last_active_at = datetime.utcnow()
+
+    await db.commit()
+    return {"ok": True}

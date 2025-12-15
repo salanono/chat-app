@@ -173,3 +173,69 @@ async def visitor_message(sid, data):
 
                 await sio.emit("new_message", bot_payload, room=session_id_str)
                 await sio.emit("new_message", bot_payload, room="operators")
+
+@sio.event
+async def operator_message(sid, data):
+    """
+    data: {
+      "session_id": "uuid-string",
+      "content": "text...",
+      "attachment_url": "/uploads/xxx.png" (optional)
+    }
+    """
+    session_id_str = data.get("session_id")
+    content = (data.get("content") or "").strip()
+    attachment_url = data.get("attachment_url")
+
+    if not session_id_str:
+        return
+
+    if not content and not attachment_url:
+        return
+
+    session_uuid = uuid.UUID(session_id_str)
+
+    async with AsyncSessionLocal() as db:
+        # セッション取得
+        q = await db.execute(
+            select(models.Session).where(models.Session.id == session_uuid)
+        )
+        sess = q.scalar_one_or_none()
+        if not sess:
+            return
+
+        # OPERATOR メッセージ保存
+        msg = models.Message(
+            session_id=session_uuid,
+            sender_type=models.SenderType.OPERATOR,
+            sender_id=None,  # 必要なら operator user_id を入れる
+            content=content,
+            attachment_url=attachment_url,
+            created_at=datetime.utcnow(),
+            is_read=False,
+            read_at=None,
+        )
+        db.add(msg)
+
+        # セッション更新
+        await db.execute(
+            models.Session.__table__.update()
+            .where(models.Session.id == session_uuid)
+            .values(last_active_at=datetime.utcnow())
+        )
+
+        await db.commit()
+        await db.refresh(msg)
+
+        payload = {
+            "id": str(msg.id),
+            "session_id": str(msg.session_id),
+            "sender_type": "operator",
+            "content": msg.content,
+            "attachment_url": msg.attachment_url,
+            "created_at": msg.created_at.isoformat(),
+        }
+
+        # ★ visitor と admin の両方へ配信
+        await sio.emit("new_message", payload, room=session_id_str)
+        await sio.emit("new_message", payload, room="operators")

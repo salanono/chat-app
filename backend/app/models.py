@@ -105,6 +105,8 @@ class Session(Base):
         back_populates="session",
         cascade="all, delete-orphan",
     )
+    handoff_requested = Column(Boolean, nullable=False, server_default=text("false"))
+    handoff_requested_at = Column(DateTime, nullable=True)
 
 
 class Message(Base):

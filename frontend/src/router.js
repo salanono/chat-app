@@ -22,7 +22,7 @@ const routes = [
   { path: "/admin/install", component: AdminInstall },
   { path: "/admin/bot", component: AdminBotSettings },
   { path: "/admin/api-keys", component: AdminApiKeys },
-  
+
   // それ以外 → /widget へ
   { path: "/:pathMatch(.*)*", redirect: "/widget" },
 ];

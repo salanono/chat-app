@@ -1,3 +1,4 @@
+<!-- frontend/src/pages/Widget.vue -->
 <script setup>
 import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 import { io } from "socket.io-client";
@@ -27,6 +28,125 @@ const createVisitorIdentifier = () => {
   return id;
 };
 
+// ---- メッセージエリアを一番下までスクロール ----
+const scrollToBottom = () => {
+  requestAnimationFrame(() => {
+    const container = document.querySelector(".widget__messages");
+    if (container) container.scrollTop = container.scrollHeight;
+  });
+};
+
+// ---- sender_type 正規化 ----
+const normalizeSenderType = (raw) => {
+  if (!raw) return "visitor";
+  const upper = String(raw).toUpperCase();
+  if (upper === "VISITOR") return "visitor";
+  if (upper === "OPERATOR") return "operator";
+  if (upper === "SYSTEM") return "system";
+  return String(raw).toLowerCase();
+};
+
+// ---- ローカル表示用（Botでも使う） ----
+const pushLocalMessage = ({
+  sender_type,
+  content,
+  attachment_url = null,
+  local_id = null,
+  pending = false,
+}) => {
+  messages.value.push({
+    id: local_id || "local_" + Math.random().toString(36).slice(2),
+    session_id: sessionId.value || null,
+    sender_type,
+    sender_id: null,
+    content,
+    attachment_url,
+    created_at: new Date().toISOString(),
+    pending,
+  });
+  scrollToBottom();
+};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---- 開閉 ----
+const toggleOpen = () => {
+  isOpen.value = !isOpen.value;
+};
+
+// --------------------
+// Bot 設定取得（widget側反映）
+// --------------------
+const botEnabled = ref(false);
+const botWelcome = ref("");
+const botOptions = ref([]);
+
+const canUseBot = computed(() => !!apiKey); // bot設定APIは api_key 前提
+const mode = ref("bot"); // "bot" | "operator"
+
+const fetchBotConfig = async () => {
+  if (!apiKey) {
+    botEnabled.value = false;
+    botWelcome.value = "";
+    botOptions.value = [];
+    return;
+  }
+
+  const res = await fetch(
+    `${API_BASE}/api/widget/bot?api_key=${encodeURIComponent(apiKey)}`
+  );
+
+  if (!res.ok) {
+    console.error("[widget] bot config fetch failed:", await res.text());
+    botEnabled.value = false;
+    botWelcome.value = "";
+    botOptions.value = [];
+    return;
+  }
+
+  const data = await res.json().catch(() => ({}));
+
+  botEnabled.value = !!data.enabled;
+  botWelcome.value = data.welcome_message || "";
+  // ★ active だけ返すAPIにしてるならここはそのまま
+  botOptions.value = Array.isArray(data.options) ? data.options : [];
+};
+
+// ---- Bot 選択肢クリック（Adminに送らない） ----
+const onBotOptionClick = async (opt) => {
+  // ユーザー選択を表示（ローカルのみ）
+  pushLocalMessage({ sender_type: "visitor", content: opt.label });
+
+  // handoff だけ Admin へ繋ぐ
+  if (opt.action === "handoff") {
+    await startOperatorChat();
+    return;
+  }
+
+  // link
+  if (opt.action === "link" && opt.link_url) {
+    pushLocalMessage({
+      sender_type: "system",
+      content: `こちらをご確認ください：${opt.link_url}`,
+    });
+    return;
+  }
+
+  // 通常 reply_text（typing演出）
+  if (opt.reply_text) {
+    pushLocalMessage({ sender_type: "system", content: "…" });
+    await sleep(250);
+    messages.value.pop();
+    pushLocalMessage({ sender_type: "system", content: opt.reply_text });
+  } else {
+    pushLocalMessage({ sender_type: "system", content: "承知しました！" });
+  }
+};
+
+// --------------------
+// セッション作成 / 履歴 / Socket（operatorモードだけ）
+// --------------------
+
 // ---- セッション作成 or 取得 ----
 const fetchOrCreateSession = async () => {
   const visitor_identifier = createVisitorIdentifier();
@@ -49,7 +169,6 @@ const fetchOrCreateSession = async () => {
   });
 
   const data = await res.json().catch(() => ({}));
-
   if (!res.ok) {
     console.error("[widget] セッション作成に失敗:", data);
     return;
@@ -64,26 +183,18 @@ const loadHistory = async () => {
   const res = await fetch(
     `${API_BASE}/api/widget/sessions/${sessionId.value}/messages`
   );
-  const data = await res.json();
-
+  const data = await res.json().catch(() => []);
   messages.value = (data || []).map((m) => ({
     ...m,
     sender_type: normalizeSenderType(m.sender_type),
   }));
-
   scrollToBottom();
-};
-
-// ---- メッセージエリアを一番下までスクロール ----
-const scrollToBottom = () => {
-  requestAnimationFrame(() => {
-    const container = document.querySelector(".widget__messages");
-    if (container) container.scrollTop = container.scrollHeight;
-  });
 };
 
 // ---- Socket.IO 接続 ----
 const connectSocket = () => {
+  if (socket.value) return;
+
   socket.value = io(API_BASE, {
     path: "/ws/socket.io",
     withCredentials: false,
@@ -105,26 +216,110 @@ const connectSocket = () => {
   });
 
   socket.value.on("new_message", (msg) => {
-    if (msg.session_id === sessionId.value) {
-      messages.value.push({
-        ...msg,
-        sender_type: normalizeSenderType(msg.sender_type),
-      });
-      scrollToBottom();
+    const sid = String(msg.session_id);
+    if (sid !== String(sessionId.value)) return;
+
+    const normalized = {
+      ...msg,
+      session_id: sid,
+      sender_type: normalizeSenderType(msg.sender_type),
+    };
+
+    // ★ 自分(visitor)が送ったメッセージのエコーなら pending を探して置換
+    if (normalized.sender_type === "visitor") {
+      const idx = messages.value.findIndex(
+        (m) =>
+          m.pending === true &&
+          m.sender_type === "visitor" &&
+          (m.content || "") === (normalized.content || "") &&
+          (m.attachment_url || null) === (normalized.attachment_url || null)
+      );
+      if (idx !== -1) {
+        messages.value[idx] = { ...normalized, pending: false };
+        scrollToBottom();
+        return;
+      }
     }
+
+    // 通常追加
+    messages.value.push(normalized);
+    scrollToBottom();
   });
 };
 
-// ---- メッセージ送信（テキスト） ----
-const sendMessage = () => {
-  const text = inputText.value.trim();
-  if (!text || !socket.value || !isConnected.value || !sessionId.value) return;
+// ---- handoff: operatorチャット開始（ここで初めてAdminに出る） ----
+const startOperatorChat = async () => {
+  if (mode.value === "operator") return;
 
-  // UI 先出し（体感を良くする）
+  // 1) セッション作成（ここで初めてDBに触る）
+  await fetchOrCreateSession();
+  if (!sessionId.value) {
+    pushLocalMessage({
+      sender_type: "system",
+      content: "接続に失敗しました。もう一度お試しください。",
+    });
+    return;
+  }
+
+  // 2) handoff 요청（ここで初めてAdminに出る）
+  const res = await fetch(
+    `${API_BASE}/api/widget/sessions/${
+      sessionId.value
+    }/handoff?api_key=${encodeURIComponent(apiKey)}`,
+    { method: "POST" }
+  );
+  if (!res.ok) {
+    pushLocalMessage({
+      sender_type: "system",
+      content: "オペレーター接続の開始に失敗しました。",
+    });
+    return;
+  }
+
+  // 3) socket接続 & join
+  connectSocket();
+
+  // 4) UI案内（必要なら）
+  mode.value = "operator";
+  pushLocalMessage({
+    sender_type: "system",
+    content: "オペレーターに接続しました。少々お待ちください。",
+  });
+
+  // 5)（任意）履歴ロード
+  await loadHistory();
+};
+
+// --------------------
+// テキスト送信
+// --------------------
+const sendMessage = async () => {
+  const text = inputText.value.trim();
+  if (!text) return;
+
+  if (mode.value === "bot") {
+    // ここはそのまま
+    pushLocalMessage({ sender_type: "visitor", content: text });
+    pushLocalMessage({
+      sender_type: "system",
+      content:
+        "ありがとうございます！オペレーターに相談する場合は「オペレーターに相談」を選んでください。",
+    });
+    inputText.value = "";
+    return;
+  }
+
+  if (!socket.value || !isConnected.value || !sessionId.value) return;
+
+  // ★ pending を入れる
+  const localId = `pending_${Date.now()}_${Math.random()
+    .toString(16)
+    .slice(2)}`;
   pushLocalMessage({
     sender_type: "visitor",
     content: text,
-    attachment_url: null,
+    local_id: localId,
+    pending: true,
   });
 
   socket.value.emit("visitor_message", {
@@ -135,27 +330,20 @@ const sendMessage = () => {
 
   inputText.value = "";
 };
-
-const pushLocalMessage = ({ sender_type, content, attachment_url }) => {
-  messages.value.push({
-    id: `tmp_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-    session_id: sessionId.value,
-    sender_type,
-    sender_id: null,
-    content,
-    attachment_url,
-    created_at: new Date().toISOString(),
-  });
-  scrollToBottom();
-};
-
 // --------------------
-// 画像アップロード
+// 画像アップロード（operatorモードのみ）
 // --------------------
 const fileInput = ref(null);
 const previewImageUrl = ref(null);
 
-const openFilePicker = () => {
+const openFilePicker = async () => {
+  if (mode.value === "bot") {
+    pushLocalMessage({
+      sender_type: "system",
+      content: "画像送信はオペレーター接続後に利用できます。",
+    });
+    return;
+  }
   fileInput.value?.click();
 };
 
@@ -173,6 +361,9 @@ const onFileChange = async (e) => {
 };
 
 const uploadImage = async (file) => {
+  if (mode.value !== "operator") return;
+  if (!socket.value || !isConnected.value || !sessionId.value) return;
+
   const form = new FormData();
   form.append("file", file);
 
@@ -189,11 +380,6 @@ const uploadImage = async (file) => {
   const data = await res.json().catch(() => ({}));
   if (!data.url) {
     console.error("[widget] upload: no url in response", data);
-    return;
-  }
-
-  if (!socket.value || !isConnected.value || !sessionId.value) {
-    console.error("[widget] socket/session not ready");
     return;
   }
 
@@ -214,67 +400,6 @@ const uploadImage = async (file) => {
 const openImagePreview = (url) => (previewImageUrl.value = url);
 const closeImagePreview = () => (previewImageUrl.value = null);
 
-// ---- 開閉 ----
-const toggleOpen = () => {
-  isOpen.value = !isOpen.value;
-};
-
-// --------------------
-// Bot 設定取得（widget側反映）
-// --------------------
-const botEnabled = ref(false);
-const botWelcome = ref("");
-const botOptions = ref([]);
-
-const canUseBot = computed(() => !!apiKey); // bot設定APIは api_key 前提
-
-const fetchBotConfig = async () => {
-  if (!apiKey) {
-    botEnabled.value = false;
-    botWelcome.value = "";
-    botOptions.value = [];
-    return;
-  }
-
-  const res = await fetch(
-    `${API_BASE}/api/widget/bot?api_key=${encodeURIComponent(apiKey)}`
-  );
-  if (!res.ok) {
-    console.error("[widget] bot config fetch failed:", await res.text());
-    return;
-  }
-
-  const data = await res.json().catch(() => ({}));
-
-  botEnabled.value = !!data.enabled;
-  botWelcome.value = data.welcome_message || "";
-  botOptions.value = data.options || [];
-};
-
-const onBotOptionClick = (opt) => {
-  if (!socket.value || !isConnected.value || !sessionId.value) return;
-
-  // クリックした選択肢は「自分の発言」として即表示
-  pushLocalMessage({
-    sender_type: "visitor",
-    content: opt.label || "",
-    attachment_url: null,
-  });
-
-  // backendが bot_option_id を見て処理する想定（未知フィールドでも害はない）
-  socket.value.emit("visitor_message", {
-    session_id: sessionId.value,
-    bot_option_id: opt.id,
-    content: opt.label || "",
-    attachment_url: null,
-  });
-
-  // もしリンク型なら（任意）別タブで開く
-  if (opt.link_url) {
-    window.open(opt.link_url, "_blank", "noopener,noreferrer");
-  }
-};
-
 // ---- 時刻表示 ----
 const formatTime = (isoString) => {
   if (!isoString) return "";
@@ -284,79 +409,71 @@ const formatTime = (isoString) => {
     : isoString + "Z";
 
   const d = new Date(fixed);
-
   return d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
 };
 
-const normalizeSenderType = (raw) => {
-  if (!raw) return "visitor";
-  const upper = String(raw).toUpperCase();
-  if (upper === "VISITOR") return "visitor";
-  if (upper === "OPERATOR") return "operator";
-  if (upper === "SYSTEM") return "system";
-  return String(raw).toLowerCase();
-};
-
 // ---- 初期化 ----
-let botTimer = null;
-
 onMounted(async () => {
-  await fetchOrCreateSession();
-  await loadHistory();
-
-  // bot設定取得（最初に必ず1回）
   await fetchBotConfig();
 
-  // botの即時反映をしたいならポーリング（15秒）
-  if (canUseBot.value) {
-    botTimer = window.setInterval(fetchBotConfig, 15000);
+  // Botウェルカム（ローカル表示）
+  if (botEnabled.value && botWelcome.value && messages.value.length === 0) {
+    pushLocalMessage({ sender_type: "system", content: botWelcome.value });
   }
 
-  connectSocket();
+  // Botが無効なら、最初から operator に繋ぐ導線を出したい場合はここで startOperatorChat() でもOK
 });
 
 onBeforeUnmount(() => {
   if (socket.value) socket.value.disconnect();
-  if (botTimer) clearInterval(botTimer);
 });
 </script>
 
 <template>
   <div class="widget-page">
-    <!-- ランチャーボタン（常に右下に表示） -->
+    <!-- ランチャーボタン -->
     <button class="widget-launcher" @click="toggleOpen">
       <span v-if="!isOpen">💬 チャットで相談</span>
       <span v-else>✕ 閉じる</span>
     </button>
 
-    <!-- 開いているときだけチャット本体を表示 -->
+    <!-- チャット本体 -->
     <transition name="widget-panel">
       <div v-if="isOpen" class="widget-container">
         <div class="widget">
           <!-- ヘッダー -->
           <header class="widget__header">
             <div class="widget__header-left">
-              <div class="widget__avatar">
-                <span>CS</span>
-              </div>
+              <div class="widget__avatar"><span>CS</span></div>
               <div>
                 <h1 class="widget__title">サポートチャット</h1>
-                <p class="widget__subtitle">数分以内に担当者が返信します</p>
+                <p class="widget__subtitle">
+                  <span v-if="mode === 'bot' && botEnabled"
+                    >Botでご案内します</span
+                  >
+                  <span v-else>数分以内に担当者が返信します</span>
+                </p>
               </div>
             </div>
+
             <div
               class="widget__status"
               :class="{ 'widget__status--online': isConnected }"
             >
               <span class="widget__status-dot" />
               <span class="widget__status-text">
-                {{ isConnected ? "オンライン" : "接続中…" }}
+                {{
+                  mode === "bot"
+                    ? "Bot"
+                    : isConnected
+                    ? "オンライン"
+                    : "接続中…"
+                }}
               </span>
             </div>
           </header>
 
-          <!-- メッセージ一覧 -->
-
+          <!-- メッセージ -->
           <main class="widget__messages">
             <transition-group name="msg" tag="div">
               <div
@@ -366,7 +483,7 @@ onBeforeUnmount(() => {
                 :class="m.sender_type === 'visitor' ? 'msg--me' : 'msg--other'"
               >
                 <div class="msg__inner">
-                  <!-- ⭐ 画像メッセージ（枠なし・クリックで拡大） -->
+                  <!-- 画像 -->
                   <div
                     v-if="m.attachment_url"
                     class="msg__image-wrapper"
@@ -379,42 +496,35 @@ onBeforeUnmount(() => {
                     />
                   </div>
 
-                  <!-- ⭐ テキストメッセージ -->
+                  <!-- テキスト -->
                   <div v-else class="msg__bubble">
                     <p class="msg__text">{{ m.content }}</p>
                   </div>
 
-                  <!-- 時刻 -->
-                  <div class="msg__time">
-                    {{ formatTime(m.created_at) }}
-                  </div>
+                  <div class="msg__time">{{ formatTime(m.created_at) }}</div>
                 </div>
               </div>
             </transition-group>
 
+            <!-- 何もないときの空状態 -->
             <div v-if="messages.length === 0" class="widget__empty">
-              <p v-if="botEnabled">{{ botWelcome }}</p>
+              <p v-if="botEnabled && canUseBot">
+                {{ botWelcome || "こんにちは 👋" }}
+              </p>
               <p v-else>こんにちは 👋</p>
 
-              <div v-if="botEnabled && botOptions.length" class="bot-options">
-                <button
-                  v-for="opt in botOptions"
-                  :key="opt.id"
-                  class="bot-option-btn"
-                  @click="onBotOptionClick(opt)"
-                >
-                  {{ opt.label }}
-                </button>
-              </div>
-
-              <p v-else>
-                ご質問やお困りごとがあれば、下の入力欄からメッセージを送ってください。
+              <p style="margin-top: 8px">
+                <span v-if="mode === 'bot' && botEnabled">
+                  下のボタンから選んでください。
+                </span>
+                <span v-else> ご質問は下の入力欄から送信してください。 </span>
               </p>
             </div>
           </main>
-          <!-- Bot クイック返信（常に表示） -->
+
+          <!-- Botクイック選択肢（Botモードのみ / 1箇所だけ表示） -->
           <div
-            v-if="botEnabled && botOptions.length"
+            v-if="mode === 'bot' && botEnabled && botOptions.length"
             class="bot-options bot-options--inline"
           >
             <button
@@ -426,9 +536,9 @@ onBeforeUnmount(() => {
               {{ opt.label }}
             </button>
           </div>
+
           <!-- 入力エリア -->
-          <footer class="widget__footer">
-            <!-- 📷 画像アップロード用の隠し input（これだけでOK） -->
+          <footer v-if="mode === 'operator'" class="widget__footer">
             <input
               ref="fileInput"
               type="file"
@@ -437,23 +547,26 @@ onBeforeUnmount(() => {
               @change="onFileChange"
             />
 
-            <!-- 📷 画像ボタン -->
             <button class="widget__button" @click="openFilePicker">📷</button>
 
-            <!-- テキスト入力 -->
             <input
               v-model="inputText"
               type="text"
               class="widget__input"
-              placeholder="メッセージを入力して Enter で送信"
+              :placeholder="
+                mode === 'bot'
+                  ? '（Bot）まずは下の選択肢がおすすめ'
+                  : 'メッセージを入力して Enter で送信'
+              "
               @keyup.enter="sendMessage"
             />
 
-            <!-- 送信ボタン -->
             <button
               class="widget__button"
               @click="sendMessage"
-              :disabled="!isConnected || !inputText.trim()"
+              :disabled="
+                mode === 'operator' && (!isConnected || !inputText.trim())
+              "
             >
               送信
             </button>
@@ -461,7 +574,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </transition>
-    <!-- 🔍 画像プレビュー（モーダル） -->
+
+    <!-- 画像プレビュー -->
     <div
       v-if="previewImageUrl"
       class="image-preview"
@@ -478,7 +592,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style>
-/* iframe 内のルート要素 */
 .widget-page {
   position: relative;
   width: 100%;
@@ -486,7 +599,6 @@ onBeforeUnmount(() => {
   background: transparent;
 }
 
-/* 右下ランチャー */
 .widget-launcher {
   position: absolute;
   right: 16px;
@@ -506,7 +618,6 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
-/* ウィジェット本体 */
 .widget-container {
   position: absolute;
   right: 0;
@@ -528,7 +639,6 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
-/* ヘッダー */
 .widget__header {
   padding: 12px 14px 10px;
   border-bottom: 1px solid #bae6fd;
@@ -599,7 +709,6 @@ onBeforeUnmount(() => {
   background: #4fc3f7;
 }
 
-/* メッセージ一覧 */
 .widget__messages {
   flex: 1;
   padding: 10px 12px;
@@ -607,24 +716,21 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 4px;
   overflow-y: auto;
+  background: #ffffff;
 }
 
-/* メッセージコンテナ（左右寄せ用） */
 .msg {
   display: flex;
 }
 
-/* 自分（訪問者）=右寄せ */
 .msg--me {
   justify-content: flex-end;
 }
 
-/* 相手=左寄せ */
 .msg--other {
   justify-content: flex-start;
 }
 
-/* バブル + 時刻を縦に並べるコンテナ */
 .msg__inner {
   display: flex;
   flex-direction: column;
@@ -632,18 +738,15 @@ onBeforeUnmount(() => {
   margin: 2px 0;
 }
 
-/* 自分側はコンテナごと右に寄せる & 右端に揃える */
 .msg--me .msg__inner {
   margin-left: auto;
   align-items: flex-end;
 }
 
-/* 相手側は左に寄せる */
 .msg--other .msg__inner {
   align-items: flex-start;
 }
 
-/* 吹き出し */
 .msg__bubble {
   max-width: 100%;
   padding: 6px 10px;
@@ -652,14 +755,12 @@ onBeforeUnmount(() => {
   line-height: 1.4;
 }
 
-/* 自分（訪問者） */
 .msg--me .msg__bubble {
   background: #e0f7fa;
   border: 1px solid #bae6fd;
   color: #0369a1;
 }
 
-/* オペレーター */
 .msg--other .msg__bubble {
   background: #f1f5f9;
   border: 1px solid #e2e8f0;
@@ -672,19 +773,6 @@ onBeforeUnmount(() => {
   line-height: 1.4;
 }
 
-/* 画像バブル内 */
-.msg__image-wrapper {
-  margin-top: 4px;
-}
-
-.msg__image {
-  max-width: 180px;
-  max-height: 180px;
-  border-radius: 10px;
-  display: block;
-}
-
-/* 時刻：バブルの外・下側に表示 */
 .msg__time {
   margin-top: 2px;
   font-size: 11px;
@@ -692,13 +780,36 @@ onBeforeUnmount(() => {
   color: #94a3b8;
 }
 
-/* 時刻の左右寄せ */
 .msg--me .msg__time {
   text-align: right;
 }
 
 .msg--other .msg__time {
   text-align: left;
+}
+
+/* 画像 */
+.msg__image-wrapper {
+  max-width: 70%;
+  cursor: pointer;
+}
+
+.msg-image {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  display: block;
+  border: none !important;
+  background: none !important;
+  box-shadow: none !important;
+}
+
+.msg--me .msg__image-wrapper {
+  margin-left: auto;
+}
+
+.msg--other .msg__image-wrapper {
+  margin-right: auto;
 }
 
 /* 空状態 */
@@ -709,7 +820,7 @@ onBeforeUnmount(() => {
   color: #94a3b8;
 }
 
-/* 入力エリア */
+/* 入力 */
 .widget__footer {
   padding: 10px 12px;
   border-top: 1px solid #e2e8f0;
@@ -717,30 +828,6 @@ onBeforeUnmount(() => {
   gap: 8px;
   background: #ffffff;
   align-items: center;
-}
-
-/* 隠しファイル入力 */
-.widget__file-input {
-  display: none;
-}
-
-/* 画像ボタン */
-.widget__icon-button {
-  width: 32px;
-  height: 32px;
-  border-radius: 999px;
-  border: none;
-  background: #e0f2fe;
-  font-size: 16px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.widget__icon-button:disabled {
-  opacity: 0.6;
-  cursor: default;
 }
 
 .widget__input {
@@ -765,9 +852,36 @@ onBeforeUnmount(() => {
   font-weight: 600;
   background: #4fc3f7;
   color: white;
+  cursor: pointer;
 }
 
-/* ウィジェット開閉アニメーション */
+/* Bot選択肢（横スクロール） */
+.bot-options--inline {
+  padding: 8px 12px;
+  border-top: 1px solid #e2e8f0;
+  background: #ffffff;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.bot-option-btn {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.bot-option-btn:hover {
+  background: #f1f5f9;
+}
+
+/* 開閉アニメ */
 .widget-panel-enter-active,
 .widget-panel-leave-active {
   transition: opacity 0.18s ease, transform 0.18s ease;
@@ -779,7 +893,7 @@ onBeforeUnmount(() => {
   transform: translateY(8px) scale(0.97);
 }
 
-/* メッセージが追加されたときのふわっとアニメーション */
+/* メッセージ追加アニメ */
 .msg-enter-active {
   transition: all 0.16s ease-out;
 }
@@ -789,17 +903,7 @@ onBeforeUnmount(() => {
   transform: translateY(4px) scale(0.98);
 }
 
-.msg-image {
-  max-width: 180px;
-  border-radius: 8px;
-}
-
-/* 画像バブル少し調整（角丸を少しだけ小さくしても良い） */
-.msg__bubble--image {
-  padding: 4px;
-}
-
-/* 画面全体のオーバーレイ */
+/* 画像プレビュー */
 .image-preview {
   position: fixed;
   inset: 0;
@@ -807,17 +911,15 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 9999; /* iframe内で最前面に */
+  z-index: 9999;
 }
 
-/* 中央のボックス */
 .image-preview__inner {
   position: relative;
   max-width: 90vw;
   max-height: 90vh;
 }
 
-/* 拡大画像 */
 .image-preview__img {
   max-width: 100%;
   max-height: 100%;
@@ -825,7 +927,6 @@ onBeforeUnmount(() => {
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
 }
 
-/* 閉じるボタン */
 .image-preview__close {
   position: absolute;
   top: -10px;
@@ -839,66 +940,5 @@ onBeforeUnmount(() => {
   color: #fff;
   font-size: 16px;
   line-height: 1;
-}
-
-/* 画像メッセージ用（枠なし・影なし） */
-.msg__image-wrapper {
-  max-width: 70%;
-  cursor: pointer;
-}
-
-.msg-image {
-  width: 100%;
-  height: auto;
-  border-radius: 12px;
-  display: block;
-  border: none !important;
-  background: none !important;
-  box-shadow: none !important;
-}
-
-/* 画像は右/左寄せになるようにコンテナも追従 */
-.msg--me .msg__image-wrapper {
-  margin-left: auto;
-}
-
-.msg--other .msg__image-wrapper {
-  margin-right: auto;
-}
-
-.bot-options {
-  margin-top: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: stretch;
-}
-
-.bot-option-btn {
-  border: 1px solid #cbd5e1;
-  background: #ffffff;
-  color: #0f172a;
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.bot-option-btn:hover {
-  background: #f1f5f9;
-}
-
-.bot-options--inline {
-  padding: 8px 12px;
-  border-top: 1px solid #e2e8f0;
-  background: #ffffff;
-  display: flex;
-  gap: 8px;
-  overflow-x: auto;
-}
-
-.bot-options--inline .bot-option-btn {
-  white-space: nowrap;
-  flex: 0 0 auto;
 }
 </style>
