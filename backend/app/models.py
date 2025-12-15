@@ -13,9 +13,10 @@ from sqlalchemy import (
     Text,
     text,
     ForeignKey,
+    func,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import relationship  # ⭐ 追加
+from sqlalchemy.orm import relationship
 
 from .db import Base
 
@@ -141,3 +142,46 @@ class ApiKey(Base):
 
     user = relationship("User", backref="api_keys")
     company = relationship("Company", backref="api_keys")
+
+class BotSetting(Base):
+    __tablename__ = "bot_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=True)
+
+    company_id = Column(Integer, ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    enabled = Column(Boolean, nullable=False, server_default="true")
+    welcome_message = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    # もし bot_options が bot_setting_id を持ってるならこれでOK
+    options = relationship(
+        "BotOption",
+        back_populates="bot_setting",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+class BotOption(Base):
+    __tablename__ = "bot_options"
+
+    id = Column(Integer, primary_key=True)
+    bot_setting_id = Column(
+        Integer,
+        ForeignKey("bot_settings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    label = Column(String, nullable=False)
+    reply_text = Column(Text, nullable=True)
+
+    # ★ 追加
+    action = Column(String, nullable=True)
+    link_url = Column(Text, nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    bot_setting = relationship("BotSetting", back_populates="options")

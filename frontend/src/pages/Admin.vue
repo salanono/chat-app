@@ -7,6 +7,10 @@
         管理画面
         <span v-if="companyName">{{ companyName }}</span>
       </h1>
+      <!-- Admin.vue の header の中に追加（例） -->
+      <button class="logout-btn" @click="router.push('/admin/bot')">
+        Bot設定
+      </button>
       <button class="logout-btn" @click="logout">ログアウト</button>
     </header>
 

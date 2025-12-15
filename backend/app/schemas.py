@@ -1,6 +1,6 @@
 # backend/app/schemas.py
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr
@@ -103,3 +103,45 @@ class MessageRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+class BotOptionRead(BaseModel):
+    id: int
+    label: str
+    reply_text: str | None
+    action: str | None
+    link_url: str | None
+    sort_order: int
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BotSettingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    enabled: bool
+    welcome_message: str
+    options: List[BotOptionRead]
+
+
+class BotSettingUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    welcome_message: Optional[str] = None
+
+
+class BotOptionCreate(BaseModel):
+    label: str
+    reply_text: str | None = None
+    action: str | None = None
+    link_url: str | None = None
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class BotOptionUpdate(BaseModel):
+    label: str | None = None
+    reply_text: str | None = None
+    action: str | None = None
+    link_url: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None

@@ -5,6 +5,7 @@ import WidgetPage from "./pages/Widget.vue";
 import AdminLogin from "./pages/AdminLogin.vue";
 import AdminRegister from "./pages/AdminRegister.vue";
 import Admin from "./pages/Admin.vue";
+import AdminBotSettings from "./pages/AdminBotSettings.vue";
 
 const routes = [
   // ウィジェット
@@ -16,6 +17,8 @@ const routes = [
 
   // 管理画面（ログイン必須）
   { path: "/admin", component: Admin },
+
+  { path: "/admin/bot", component: AdminBotSettings },
 
   // それ以外 → /widget へ
   { path: "/:pathMatch(.*)*", redirect: "/widget" },

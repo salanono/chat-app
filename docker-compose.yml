@@ -29,7 +29,7 @@ services:
       POSTGRES_USER: chatuser
       POSTGRES_PASSWORD: chatpass
       POSTGRES_DB: chatdb
-      DATABASE_URL: postgresql+asyncpg://chatuser:chatpass@chat-db:5432/chatdb
+      DATABASE_URL: postgresql+asyncpg://chatuser:password@db:5432/chatdb
     ports:
       - "5432:5432"
     volumes:

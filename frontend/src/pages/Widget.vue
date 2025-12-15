@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 import { io } from "socket.io-client";
 
 const API_BASE = "http://localhost:8000";
@@ -9,7 +9,7 @@ const inputText = ref("");
 const socket = ref(null);
 const sessionId = ref(null);
 const isConnected = ref(false);
-const isOpen = ref(true); // ウィジェットの開閉
+const isOpen = ref(true);
 
 // URL から owner_id / api_key を取得
 const url = new URL(window.location.href);
@@ -31,18 +31,10 @@ const createVisitorIdentifier = () => {
 const fetchOrCreateSession = async () => {
   const visitor_identifier = createVisitorIdentifier();
 
-  // owner_id or api_key のどちらかを payload に入れる
   const payload = { visitor_identifier };
+  if (apiKey) payload.api_key = apiKey;
+  else if (ownerId) payload.owner_id = ownerId;
 
-  if (apiKey) {
-    payload.api_key = apiKey;
-  } else if (ownerId) {
-    payload.owner_id = ownerId;
-  }
-
-  console.log("[widget] create session payload:", payload);
-
-  // どちらも無ければエラーにしておく（デバッグ用）
   if (!payload.api_key && !payload.owner_id) {
     console.error(
       "[widget] URL に owner_id も api_key もありません。?api_key=... か ?owner_id=... を付けてください"
@@ -50,38 +42,35 @@ const fetchOrCreateSession = async () => {
     return;
   }
 
-  try {
-    const res = await fetch(`${API_BASE}/api/sessions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+  const res = await fetch(`${API_BASE}/api/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-    const data = await res.json();
-    console.log("[widget] create session response:", data);
+  const data = await res.json().catch(() => ({}));
 
-    if (!res.ok) {
-      console.error("セッション作成に失敗しました", data);
-      return;
-    }
-
-    sessionId.value = data.id;
-  } catch (e) {
-    console.error("セッション作成でエラー:", e);
+  if (!res.ok) {
+    console.error("[widget] セッション作成に失敗:", data);
+    return;
   }
+  sessionId.value = data.id;
 };
 
 // ---- 過去メッセージ取得 ----
 const loadHistory = async () => {
   if (!sessionId.value) return;
+
   const res = await fetch(
     `${API_BASE}/api/widget/sessions/${sessionId.value}/messages`
   );
   const data = await res.json();
-  messages.value = data.map((m) => ({
+
+  messages.value = (data || []).map((m) => ({
     ...m,
     sender_type: normalizeSenderType(m.sender_type),
   }));
+
   scrollToBottom();
 };
 
@@ -89,9 +78,7 @@ const loadHistory = async () => {
 const scrollToBottom = () => {
   requestAnimationFrame(() => {
     const container = document.querySelector(".widget__messages");
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
+    if (container) container.scrollTop = container.scrollHeight;
   });
 };
 
@@ -104,9 +91,7 @@ const connectSocket = () => {
 
   socket.value.on("connect", () => {
     isConnected.value = true;
-    console.log("[widget] socket connected", socket.value.id);
 
-    // セッションの room に join
     if (sessionId.value) {
       socket.value.emit("join_session", {
         session_id: sessionId.value,
@@ -117,16 +102,14 @@ const connectSocket = () => {
 
   socket.value.on("disconnect", () => {
     isConnected.value = false;
-    console.log("[widget] socket disconnected");
   });
 
   socket.value.on("new_message", (msg) => {
     if (msg.session_id === sessionId.value) {
-      const normalized = {
+      messages.value.push({
         ...msg,
         sender_type: normalizeSenderType(msg.sender_type),
-      };
-      messages.value.push(normalized);
+      });
       scrollToBottom();
     }
   });
@@ -135,7 +118,14 @@ const connectSocket = () => {
 // ---- メッセージ送信（テキスト） ----
 const sendMessage = () => {
   const text = inputText.value.trim();
-  if (!text || !socket.value || !isConnected.value) return;
+  if (!text || !socket.value || !isConnected.value || !sessionId.value) return;
+
+  // UI 先出し（体感を良くする）
+  pushLocalMessage({
+    sender_type: "visitor",
+    content: text,
+    attachment_url: null,
+  });
 
   socket.value.emit("visitor_message", {
     session_id: sessionId.value,
@@ -146,26 +136,24 @@ const sendMessage = () => {
   inputText.value = "";
 };
 
-const handleFileButtonClick = () => {
-  if (!fileInputRef.value) return;
-
-  // 同じファイルを2回連続で選んでも change が発火するように
-  fileInputRef.value.value = "";
-
-  // ファイル選択ダイアログを開く
-  fileInputRef.value.click();
+const pushLocalMessage = ({ sender_type, content, attachment_url }) => {
+  messages.value.push({
+    id: `tmp_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    session_id: sessionId.value,
+    sender_type,
+    sender_id: null,
+    content,
+    attachment_url,
+    created_at: new Date().toISOString(),
+  });
+  scrollToBottom();
 };
 
-const handleFileChange = (event) => {
-  const file = event.target.files?.[0];
-  if (!file) return;
-
-  console.log("[widget] selected file:", file);
-  // このあとでアップロード処理を足していく
-};
-
-// すでにあるやつの下あたりに追記（or置き換え）
+// --------------------
+// 画像アップロード
+// --------------------
 const fileInput = ref(null);
+const previewImageUrl = ref(null);
 
 const openFilePicker = () => {
   fileInput.value?.click();
@@ -173,8 +161,6 @@ const openFilePicker = () => {
 
 const onFileChange = async (e) => {
   const file = e.target.files?.[0];
-  console.log("[widget] onFileChange, selected file:", file);
-
   if (!file) return;
 
   try {
@@ -182,14 +168,11 @@ const onFileChange = async (e) => {
   } catch (err) {
     console.error("[widget] uploadImage error:", err);
   } finally {
-    // 同じファイルを連続で選べるようにリセット
     e.target.value = "";
   }
 };
 
 const uploadImage = async (file) => {
-  console.log("[widget] uploadImage start:", file);
-
   const form = new FormData();
   form.append("file", file);
 
@@ -198,99 +181,144 @@ const uploadImage = async (file) => {
     body: form,
   });
 
-  console.log("[widget] upload response status:", res.status);
-
   if (!res.ok) {
     console.error("[widget] upload failed:", await res.text());
     return;
   }
 
-  const data = await res.json();
-  console.log("[widget] uploadImage response json:", data);
-
+  const data = await res.json().catch(() => ({}));
   if (!data.url) {
-    console.error("[widget] uploadImage: no url in response");
+    console.error("[widget] upload: no url in response", data);
     return;
   }
 
-  if (!socket.value || !isConnected.value) {
-    console.error("[widget] socket not ready", {
-      socket: !!socket.value,
-      isConnected: isConnected.value,
-    });
+  if (!socket.value || !isConnected.value || !sessionId.value) {
+    console.error("[widget] socket/session not ready");
     return;
   }
 
-  if (!sessionId.value) {
-    console.error("[widget] no sessionId, cannot send message");
-    return;
-  }
+  // UI先出し（画像も即表示）
+  pushLocalMessage({
+    sender_type: "visitor",
+    content: "",
+    attachment_url: data.url,
+  });
 
-  // ★ ここが一番大事：画像のURL付きで visitor_message を emit
-  const payload = {
+  socket.value.emit("visitor_message", {
     session_id: sessionId.value,
-    content: "", // テキスト無し
-    attachment_url: data.url, // 画像URL
-  };
-  console.log("[widget] emit visitor_message with payload:", payload);
-
-  socket.value.emit("visitor_message", payload);
+    content: "",
+    attachment_url: data.url,
+  });
 };
 
-const previewImageUrl = ref(null); // 画像拡大用
-
-const openImagePreview = (url) => {
-  previewImageUrl.value = url;
-};
-
-const closeImagePreview = () => {
-  previewImageUrl.value = null;
-};
+const openImagePreview = (url) => (previewImageUrl.value = url);
+const closeImagePreview = () => (previewImageUrl.value = null);
 
 // ---- 開閉 ----
 const toggleOpen = () => {
   isOpen.value = !isOpen.value;
 };
 
+// --------------------
+// Bot 設定取得（widget側反映）
+// --------------------
+const botEnabled = ref(false);
+const botWelcome = ref("");
+const botOptions = ref([]);
+
+const canUseBot = computed(() => !!apiKey); // bot設定APIは api_key 前提
+
+const fetchBotConfig = async () => {
+  if (!apiKey) {
+    botEnabled.value = false;
+    botWelcome.value = "";
+    botOptions.value = [];
+    return;
+  }
+
+  const res = await fetch(
+    `${API_BASE}/api/widget/bot?api_key=${encodeURIComponent(apiKey)}`
+  );
+  if (!res.ok) {
+    console.error("[widget] bot config fetch failed:", await res.text());
+    return;
+  }
+
+  const data = await res.json().catch(() => ({}));
+
+  botEnabled.value = !!data.enabled;
+  botWelcome.value = data.welcome_message || "";
+  botOptions.value = data.options || [];
+};
+
+const onBotOptionClick = (opt) => {
+  if (!socket.value || !isConnected.value || !sessionId.value) return;
+
+  // クリックした選択肢は「自分の発言」として即表示
+  pushLocalMessage({
+    sender_type: "visitor",
+    content: opt.label || "",
+    attachment_url: null,
+  });
+
+  // backendが bot_option_id を見て処理する想定（未知フィールドでも害はない）
+  socket.value.emit("visitor_message", {
+    session_id: sessionId.value,
+    bot_option_id: opt.id,
+    content: opt.label || "",
+    attachment_url: null,
+  });
+
+  // もしリンク型なら（任意）別タブで開く
+  if (opt.link_url) {
+    window.open(opt.link_url, "_blank", "noopener,noreferrer");
+  }
+};
+
+// ---- 時刻表示 ----
+const formatTime = (isoString) => {
+  if (!isoString) return "";
+
+  const fixed = String(isoString).match(/(Z|[+-]\d\d:\d\d)$/)
+    ? isoString
+    : isoString + "Z";
+
+  const d = new Date(fixed);
+
+  return d.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+};
+
+const normalizeSenderType = (raw) => {
+  if (!raw) return "visitor";
+  const upper = String(raw).toUpperCase();
+  if (upper === "VISITOR") return "visitor";
+  if (upper === "OPERATOR") return "operator";
+  if (upper === "SYSTEM") return "system";
+  return String(raw).toLowerCase();
+};
+
+// ---- 初期化 ----
+let botTimer = null;
+
 onMounted(async () => {
-  await fetchOrCreateSession(); // owner_id 付きでセッション作成
+  await fetchOrCreateSession();
   await loadHistory();
+
+  // bot設定取得（最初に必ず1回）
+  await fetchBotConfig();
+
+  // botの即時反映をしたいならポーリング（15秒）
+  if (canUseBot.value) {
+    botTimer = window.setInterval(fetchBotConfig, 15000);
+  }
+
   connectSocket();
 });
 
 onBeforeUnmount(() => {
   if (socket.value) socket.value.disconnect();
+  if (botTimer) clearInterval(botTimer);
 });
-
-const formatTime = (isoString) => {
-  if (!isoString) return "";
-
-  // 1) サーバから来る "2025-11-27T06:55:00.123456" に
-  //    タイムゾーンがなければ「UTC」として Z を足す
-  const fixed = isoString.match(/(Z|[+-]\d\d:\d\d)$/)
-    ? isoString // すでにタイムゾーン付き
-    : isoString + "Z"; // UTC 扱い
-
-  // 2) Date に食わせると、ローカルタイム(JST)に自動変換される
-  const d = new Date(fixed);
-
-  return d.toLocaleTimeString("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-};
-
-// 送信者タイプを統一（大文字/小文字どちらでもOKにする）
-const normalizeSenderType = (raw) => {
-  if (!raw) return "visitor";
-  const upper = String(raw).toUpperCase();
-
-  if (upper === "VISITOR") return "visitor";
-  if (upper === "OPERATOR") return "operator";
-  if (upper === "SYSTEM") return "system";
-
-  return String(raw).toLowerCase(); // 念のため
-};
 </script>
 
 <template>
@@ -365,13 +393,39 @@ const normalizeSenderType = (raw) => {
             </transition-group>
 
             <div v-if="messages.length === 0" class="widget__empty">
-              <p>こんにちは 👋</p>
-              <p>
+              <p v-if="botEnabled">{{ botWelcome }}</p>
+              <p v-else>こんにちは 👋</p>
+
+              <div v-if="botEnabled && botOptions.length" class="bot-options">
+                <button
+                  v-for="opt in botOptions"
+                  :key="opt.id"
+                  class="bot-option-btn"
+                  @click="onBotOptionClick(opt)"
+                >
+                  {{ opt.label }}
+                </button>
+              </div>
+
+              <p v-else>
                 ご質問やお困りごとがあれば、下の入力欄からメッセージを送ってください。
               </p>
             </div>
           </main>
-
+          <!-- Bot クイック返信（常に表示） -->
+          <div
+            v-if="botEnabled && botOptions.length"
+            class="bot-options bot-options--inline"
+          >
+            <button
+              v-for="opt in botOptions"
+              :key="opt.id"
+              class="bot-option-btn"
+              @click="onBotOptionClick(opt)"
+            >
+              {{ opt.label }}
+            </button>
+          </div>
           <!-- 入力エリア -->
           <footer class="widget__footer">
             <!-- 📷 画像アップロード用の隠し input（これだけでOK） -->
@@ -810,5 +864,41 @@ const normalizeSenderType = (raw) => {
 
 .msg--other .msg__image-wrapper {
   margin-right: auto;
+}
+
+.bot-options {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.bot-option-btn {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.bot-option-btn:hover {
+  background: #f1f5f9;
+}
+
+.bot-options--inline {
+  padding: 8px 12px;
+  border-top: 1px solid #e2e8f0;
+  background: #ffffff;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.bot-options--inline .bot-option-btn {
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 </style>

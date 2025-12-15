@@ -2,8 +2,8 @@
 from datetime import datetime
 from uuid import UUID
 import secrets
-
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Query
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -681,3 +681,221 @@ async def get_embed_script(owner_id: int):
     """.strip()
 
     return Response(content=js, media_type="application/javascript")
+
+# -------------------------
+# 管理画面: Bot設定取得
+# GET /api/bot/settings
+# -------------------------
+@router.get("/bot/settings", response_model=schemas.BotSettingRead)
+async def get_bot_settings(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="company_id not set")
+
+    q = await db.execute(
+        select(models.BotSetting).where(models.BotSetting.company_id == current_user.company_id)
+    )
+    setting = q.scalar_one_or_none()
+
+    if not setting:
+        # 初回は自動作成
+        setting = models.BotSetting(company_id=current_user.company_id)
+        db.add(setting)
+        await db.commit()
+        await db.refresh(setting)
+
+    # options も返す（relationship lazy="selectin" 前提）
+    return schemas.BotSettingRead(
+        enabled=setting.enabled,
+        welcome_message=setting.welcome_message or "",
+        options=setting.options or [],
+    )
+
+
+# -------------------------
+# 管理画面: Bot設定更新
+# PUT /api/bot/settings
+# -------------------------
+@router.put("/bot/settings", response_model=schemas.BotSettingRead)
+async def update_bot_settings(
+    payload: schemas.BotSettingUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="company_id not set")
+
+    q = await db.execute(
+        select(models.BotSetting).where(models.BotSetting.company_id == current_user.company_id)
+    )
+    setting = q.scalar_one_or_none()
+    if not setting:
+        setting = models.BotSetting(company_id=current_user.company_id)
+        db.add(setting)
+        await db.commit()
+        await db.refresh(setting)
+
+    if payload.enabled is not None:
+        setting.enabled = payload.enabled
+    if payload.welcome_message is not None:
+        setting.welcome_message = payload.welcome_message
+
+    setting.updated_at = models.datetime.utcnow() if hasattr(models, "datetime") else __import__("datetime").datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(setting)
+
+    return schemas.BotSettingRead(
+        enabled=setting.enabled,
+        welcome_message=setting.welcome_message or "",
+        options=setting.options or [],
+    )
+
+
+# -------------------------
+# 管理画面: 選択肢追加
+# POST /api/bot/options
+# -------------------------
+@router.post("/bot/options", response_model=schemas.BotOptionRead)
+async def create_bot_option(
+    payload: schemas.BotOptionCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="company_id not set")
+
+    # 会社の bot_settings を取得（なければ作成）
+    q = await db.execute(
+        select(models.BotSetting).where(models.BotSetting.company_id == current_user.company_id)
+    )
+    setting = q.scalar_one_or_none()
+    if not setting:
+        setting = models.BotSetting(company_id=current_user.company_id)
+        db.add(setting)
+        await db.commit()
+        await db.refresh(setting)
+
+    # ★ company_id じゃなく bot_setting_id で紐づける
+    opt = models.BotOption(
+        bot_setting_id=setting.id,
+        label=payload.label,
+        reply_text=payload.reply_text,
+        action=payload.action,
+        link_url=payload.link_url,
+        sort_order=payload.sort_order,
+        is_active=payload.is_active,
+    )
+    db.add(opt)
+    await db.commit()
+    await db.refresh(opt)
+    return opt
+
+# -------------------------
+# 管理画面: 選択肢更新
+# PUT /api/bot/options/{id}
+# -------------------------
+@router.put("/bot/options/{option_id}", response_model=schemas.BotOptionRead)
+async def update_bot_option(
+    option_id: int,
+    payload: schemas.BotOptionUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="company_id not set")
+
+    q = await db.execute(
+        select(models.BotOption)
+        .join(models.BotSetting, models.BotOption.bot_setting_id == models.BotSetting.id)
+        .where(
+            models.BotOption.id == option_id,
+            models.BotSetting.company_id == current_user.company_id,
+        )
+    )
+    opt = q.scalar_one_or_none()
+    if not opt:
+        raise HTTPException(status_code=404, detail="option not found")
+
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(opt, k, v)
+
+    await db.commit()
+    await db.refresh(opt)
+    return opt
+
+
+# -------------------------
+# 管理画面: 選択肢削除
+# DELETE /api/bot/options/{id}
+# -------------------------
+@router.delete("/bot/options/{option_id}")
+async def delete_bot_option(
+    option_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="company_id not set")
+
+    q = await db.execute(
+        select(models.BotOption)
+        .join(models.BotSetting, models.BotOption.bot_setting_id == models.BotSetting.id)
+        .where(
+            models.BotOption.id == option_id,
+            models.BotSetting.company_id == current_user.company_id,
+        )
+    )
+    opt = q.scalar_one_or_none()
+    if not opt:
+        raise HTTPException(status_code=404, detail="option not found")
+
+    await db.delete(opt)
+    await db.commit()
+    return {"ok": True}
+
+
+# -------------------------
+# ウィジェット: Bot設定取得（api_keyから会社特定）
+# GET /api/widget/bot?api_key=...
+# -------------------------
+@router.get("/widget/bot", response_model=schemas.BotSettingRead)
+async def get_widget_bot_settings(
+    api_key: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    q = await db.execute(
+        select(models.ApiKey).where(
+            models.ApiKey.key == api_key,
+            models.ApiKey.is_active.is_(True),
+        )
+    )
+    key = q.scalar_one_or_none()
+    if not key:
+        raise HTTPException(status_code=401, detail="invalid api_key")
+
+    company_id = key.company_id
+    if not company_id:
+        raise HTTPException(status_code=400, detail="company_id not found")
+
+    q2 = await db.execute(
+        select(models.BotSetting).where(models.BotSetting.company_id == company_id)
+    )
+    setting = q2.scalar_one_or_none()
+
+    if not setting:
+        setting = models.BotSetting(company_id=company_id)
+        db.add(setting)
+        await db.commit()
+        await db.refresh(setting)
+
+    # active だけ返す
+    options = [o for o in (setting.options or []) if o.is_active]
+
+    return schemas.BotSettingRead(
+        enabled=setting.enabled,
+        welcome_message=setting.welcome_message or "",
+        options=setting.options or [],
+    )
