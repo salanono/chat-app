@@ -6,6 +6,8 @@ import AdminLogin from "./pages/AdminLogin.vue";
 import AdminRegister from "./pages/AdminRegister.vue";
 import Admin from "./pages/Admin.vue";
 import AdminBotSettings from "./pages/AdminBotSettings.vue";
+import AdminInstall from "./pages/AdminInstall.vue";
+import AdminApiKeys from "./pages/AdminApiKeys.vue";
 
 const routes = [
   // ウィジェット
@@ -17,9 +19,10 @@ const routes = [
 
   // 管理画面（ログイン必須）
   { path: "/admin", component: Admin },
-
+  { path: "/admin/install", component: AdminInstall },
   { path: "/admin/bot", component: AdminBotSettings },
-
+  { path: "/admin/api-keys", component: AdminApiKeys },
+  
   // それ以外 → /widget へ
   { path: "/:pathMatch(.*)*", redirect: "/widget" },
 ];

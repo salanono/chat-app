@@ -897,5 +897,180 @@ async def get_widget_bot_settings(
     return schemas.BotSettingRead(
         enabled=setting.enabled,
         welcome_message=setting.welcome_message or "",
-        options=setting.options or [],
+        options=options,
     )
+
+@router.get("/embed.js")
+async def get_embed_js(
+    api_key: str = Query(...),
+):
+    js = f"""
+(function() {{
+  var d = document;
+
+  function init() {{
+    if (d.getElementById('chat-widget-frame')) return;
+
+    var iframe = d.createElement('iframe');
+    iframe.id = 'chat-widget-frame';
+    iframe.src = 'http://localhost:5173/widget?api_key={api_key}';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '20px';
+    iframe.style.bottom = '20px';
+    iframe.style.width = '360px';
+    iframe.style.height = '520px';
+    iframe.style.border = 'none';
+    iframe.style.zIndex = '999999';
+    iframe.style.borderRadius = '16px';
+    iframe.style.boxShadow = '0 10px 30px rgba(15,23,42,0.25)';
+    iframe.allow = 'clipboard-read; clipboard-write';
+
+    d.body.appendChild(iframe);
+  }}
+
+  if (d.readyState === 'complete' || d.readyState === 'interactive') {{
+    init();
+  }} else {{
+    d.addEventListener('DOMContentLoaded', init);
+  }}
+}})();
+""".strip()
+
+    return Response(content=js, media_type="application/javascript")
+
+# =============================
+# APIキー管理（管理画面用）
+# =============================
+
+@router.get("/api-keys")
+async def list_api_keys(
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="company_id not set")
+
+    q = await db.execute(
+        select(models.ApiKey)
+        .where(
+            models.ApiKey.company_id == current_user.company_id,
+            models.ApiKey.user_id == current_user.id,   # ← “自分のキーだけ” ならこれ
+            # 会社の全員のキーも見たいなら上の行を消す
+        )
+        .order_by(models.ApiKey.id.desc())
+    )
+    keys = q.scalars().all()
+
+    # ★一覧では key を全部返さない（漏洩しやすい）
+    def mask(k: str):
+        if not k:
+            return ""
+        return k[:6] + "..." + k[-4:]
+
+    return [
+        {
+            "id": k.id,
+            "name": getattr(k, "name", None),
+            "key_masked": mask(k.key),
+            "is_active": bool(k.is_active),
+            "created_at": k.created_at.isoformat() if getattr(k, "created_at", None) else None,
+        }
+        for k in keys
+    ]
+
+
+@router.post("/api-keys")
+async def create_api_key(
+    payload: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    key_str = secrets.token_hex(32)
+
+    api_key = models.ApiKey(
+        key=key_str,
+        user_id=current_user.id,
+        company_id=current_user.company_id,
+        is_active=True,
+    )
+    db.add(api_key)
+    await db.commit()
+    await db.refresh(api_key)
+
+    return {
+        "id": api_key.id,
+        "api_key": api_key.key,  # ★作成時だけフル返却
+        "is_active": bool(api_key.is_active),
+        "created_at": api_key.created_at.isoformat() if api_key.created_at else None,
+    }
+
+
+@router.post("/api-keys/{api_key_id}/disable")
+async def disable_api_key(
+    api_key_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="company_id not set")
+
+    q = await db.execute(
+        select(models.ApiKey).where(
+            models.ApiKey.id == api_key_id,
+            models.ApiKey.company_id == current_user.company_id,
+            models.ApiKey.user_id == current_user.id,  # 自分のキーだけ操作可
+        )
+    )
+    key = q.scalar_one_or_none()
+    if not key:
+        raise HTTPException(status_code=404, detail="api_key not found")
+
+    key.is_active = False
+    key.revoked_at = datetime.utcnow()
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/api-keys/{api_key_id}/rotate")
+async def rotate_api_key(
+    api_key_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    rotate = 古いの無効化 → 新しいの発行
+    """
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="company_id not set")
+
+    q = await db.execute(
+        select(models.ApiKey).where(
+            models.ApiKey.id == api_key_id,
+            models.ApiKey.company_id == current_user.company_id,
+            models.ApiKey.user_id == current_user.id,
+        )
+    )
+    old = q.scalar_one_or_none()
+    if not old:
+        raise HTTPException(status_code=404, detail="api_key not found")
+
+    old.is_active = False
+    old.revoked_at = datetime.utcnow()
+
+    new_key_str = secrets.token_hex(32)
+    new_key = models.ApiKey(
+        key=new_key_str,
+        user_id=current_user.id,
+        company_id=current_user.company_id,
+        is_active=True,
+    )
+    db.add(new_key)
+    await db.commit()
+    await db.refresh(new_key)
+
+    return {
+        "id": new_key.id,
+        "api_key": new_key.key,  # ★rotate時もフル返却は1回だけ
+        "is_active": True,
+        "created_at": new_key.created_at.isoformat() if new_key.created_at else None,
+    }

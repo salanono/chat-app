@@ -7,6 +7,12 @@
         管理画面
         <span v-if="companyName">{{ companyName }}</span>
       </h1>
+      <button class="logout-btn" @click="router.push('/admin/api-keys')">
+        APIキー
+      </button>
+      <button class="logout-btn" @click="router.push('/admin/install')">
+        設置コード
+      </button>
       <!-- Admin.vue の header の中に追加（例） -->
       <button class="logout-btn" @click="router.push('/admin/bot')">
         Bot設定
