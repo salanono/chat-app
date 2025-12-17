@@ -414,10 +414,15 @@ const uploadImage = async (file) => {
   }
 
   // UI先出し（画像も即表示）
+  const localId = `pending_${Date.now()}_${Math.random()
+    .toString(16)
+    .slice(2)}`;
   pushLocalMessage({
     sender_type: "visitor",
     content: "",
     attachment_url: data.url,
+    local_id: localId,
+    pending: true,
   });
 
   socket.value.emit("visitor_message", {
@@ -581,7 +586,7 @@ onBeforeUnmount(() => {
               @change="onFileChange"
             />
 
-            <button class="widget__button" @click="openFilePicker">📷</button>
+            <button class="widget__button" @click="openFilePicker">＋</button>
 
             <input
               v-model="inputText"
@@ -659,12 +664,12 @@ onBeforeUnmount(() => {
   height: 64px;
   padding: 0;
 
-  display: flex;              /* ★これ */
-  align-items: center;        /* ★縦中央 */
-  justify-content: center;    /* ★横中央 */
+  display: flex; /* ★これ */
+  align-items: center; /* ★縦中央 */
+  justify-content: center; /* ★横中央 */
 
-  font-size: 24px;            /* アイコン少し大きく */
-  line-height: 1;             /* 文字のズレ防止 */
+  font-size: 24px; /* アイコン少し大きく */
+  line-height: 1; /* 文字のズレ防止 */
 }
 
 .widget-container {
