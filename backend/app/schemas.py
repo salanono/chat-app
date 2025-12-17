@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr
 
-from .models import UserRole  # SQLAlchemy側の Enum をそのまま使う
+from .models import UserRole
 
 
 # ---- Token ----
@@ -16,7 +16,6 @@ class Token(BaseModel):
 
 # ---- User ----
 class UserOut(BaseModel):
-    # Pydantic v2: from_attributes=True（旧 orm_mode）
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -36,7 +35,6 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     display_name: str
-    # 会社名は任意にしておく（必要なら str にして必須にしてもOK）
     company_name: Optional[str] = None
 
 
@@ -58,7 +56,7 @@ class CompanyRead(CompanyBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ---- User (管理画面一覧用とかに使う想定) ----
+# ---- User ----
 class UserRead(BaseModel):
     id: int
     email: EmailStr
@@ -87,7 +85,6 @@ class SessionSummary(BaseModel):
 
 # ---- Messages ----
 class MessageCreate(BaseModel):
-    # 管理画面から送る想定（テキスト必須なら str のままでOK）
     content: str
     sender_type: str = "OPERATOR"
     attachment_url: Optional[str] = None
@@ -97,7 +94,6 @@ class MessageRead(BaseModel):
     id: int
     session_id: UUID
     sender_type: str
-    # 画像だけのメッセージも扱えるように Optional にしておく
     content: Optional[str] = None
     attachment_url: Optional[str] = None
     created_at: datetime

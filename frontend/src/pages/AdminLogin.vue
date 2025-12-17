@@ -62,10 +62,8 @@ const handleLogin = async () => {
 
   const data = await res.json();
 
-  // ログイン後にダッシュボードへ移動
   localStorage.setItem("admin_token", data.access_token);
 
-  // ログイン後に設置コード画面へ
   window.location.href = "/admin/install";
 };
 </script>

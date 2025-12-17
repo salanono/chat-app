@@ -70,11 +70,9 @@ class User(Base):
     )
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
-    # ★ どの会社に属しているか
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
     company = relationship("Company", back_populates="users")
 
-    # このユーザーがオーナーになっているセッション
     owned_sessions = relationship("Session", back_populates="owner_user")
 
 
@@ -92,11 +90,9 @@ class Session(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     last_active_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
-    # ★ どの会社のセッションか
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=True)
     company = relationship("Company", back_populates="sessions")
 
-    # このセッションを持っているオペレーター（User）
     owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     owner_user = relationship("User", back_populates="owned_sessions")
 
@@ -135,7 +131,7 @@ class ApiKey(Base):
     id = Column(Integer, primary_key=True, index=True)
     key = Column(String(64), unique=True, index=True, nullable=False)
 
-    name = Column(String(255), nullable=True)  # ★追加
+    name = Column(String(255), nullable=True)
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
@@ -158,7 +154,6 @@ class BotSetting(Base):
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
 
-    # もし bot_options が bot_setting_id を持ってるならこれでOK
     options = relationship(
         "BotOption",
         back_populates="bot_setting",
@@ -179,7 +174,6 @@ class BotOption(Base):
     label = Column(String, nullable=False)
     reply_text = Column(Text, nullable=True)
 
-    # ★ 追加
     action = Column(String, nullable=True)
     link_url = Column(Text, nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)

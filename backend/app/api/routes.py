@@ -13,7 +13,7 @@ from ..auth import (
     authenticate_user,
     create_access_token,
     get_current_user,
-    get_password_hash,   # ★ 追加
+    get_password_hash,
 )
 from ..db import get_db
 
@@ -28,7 +28,6 @@ async def get_or_create_embed_key(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    # 既存の有効なキーを探す
     result = await db.execute(
         select(models.ApiKey).where(
             models.ApiKey.user_id == current_user.id,
@@ -38,9 +37,8 @@ async def get_or_create_embed_key(
     )
     api_key = result.scalars().first()
 
-    # なければ新しく発行
     if not api_key:
-        key_str = secrets.token_hex(32)  # 64文字のランダムキー
+        key_str = secrets.token_hex(32)
         api_key = models.ApiKey(
             key=key_str,
             user_id=current_user.id,
@@ -69,7 +67,6 @@ async def register(payload: schemas.RegisterRequest, db: AsyncSession = Depends(
     }
     """
 
-    # 既に同じメールが存在するかチェック
     result_user = await db.execute(
         select(models.User).where(models.User.email == payload.email)
     )
@@ -80,7 +77,6 @@ async def register(payload: schemas.RegisterRequest, db: AsyncSession = Depends(
             detail="このメールアドレスは既に登録されています",
         )
 
-    # company_name が指定されていれば、その会社を検索 or 作成
     company = None
     if payload.company_name:
         result_company = await db.execute(
@@ -90,9 +86,8 @@ async def register(payload: schemas.RegisterRequest, db: AsyncSession = Depends(
         if not company:
             company = models.Company(name=payload.company_name)
             db.add(company)
-            await db.flush()  # company.id を確定
+            await db.flush()
     else:
-        # 無指定なら既存の会社を1件拾う or Default Company を作る
         result_company = await db.execute(select(models.Company))
         company = result_company.scalars().first()
         if not company:
@@ -100,7 +95,6 @@ async def register(payload: schemas.RegisterRequest, db: AsyncSession = Depends(
             db.add(company)
             await db.flush()
 
-    # ユーザー作成（最初のユーザー想定なので ADMIN にしておく）
     user = models.User(
         email=payload.email,
         password_hash=get_password_hash(payload.password),
@@ -112,7 +106,6 @@ async def register(payload: schemas.RegisterRequest, db: AsyncSession = Depends(
     await db.commit()
     await db.refresh(user)
 
-    # そのままログインさせる（LoginResponse で返す）
     token = create_access_token({"sub": user.email})
     return schemas.LoginResponse(
         access_token=token,
@@ -159,7 +152,6 @@ async def get_my_company(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    # company_id が無い場合
     if not current_user.company_id:
         raise HTTPException(status_code=404, detail="Company not found")
 
@@ -208,7 +200,6 @@ async def create_or_get_session(
     # --- owner を決めるロジック ---
     owner = None
 
-    # ① api_key があればそちらを優先
     if api_key:
         result_api = await db.execute(
             select(models.ApiKey).where(
@@ -233,7 +224,6 @@ async def create_or_get_session(
                 detail="api_key に紐づくユーザーが存在しません",
             )
 
-    # ② api_key が無い場合は owner_id を使う
     else:
         if owner_id is None:
             raise HTTPException(
@@ -253,7 +243,6 @@ async def create_or_get_session(
         if not owner:
             raise HTTPException(status_code=404, detail="owner user not found")
 
-    # ここまで来たら owner は必ず存在する
     result_session = await db.execute(
         select(models.Session).where(
             models.Session.visitor_identifier == visitor_identifier,
@@ -297,23 +286,20 @@ async def list_sessions(
     db: AsyncSession = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    # ★ ここを変更：
-    #   「メッセージが1件以上あるセッションだけ」取得するようにする
     stmt = (
         select(models.Session)
         .join(models.Message, models.Session.id == models.Message.session_id)
         .where(
             models.Session.owner_user_id == current_user.id,
             models.Session.company_id == current_user.company_id,
-            models.Session.handoff_requested.is_(True),   # ← これ追加
+            models.Session.handoff_requested.is_(True),
         )
-        .distinct()  # 同じセッションが複数メッセージで重複しないように
+        .distinct()
         .order_by(models.Session.last_active_at.desc())
     )
     result = await db.execute(stmt)
     sessions = result.scalars().all()
 
-    # 未読数をまとめて集計
     session_ids = [s.id for s in sessions]
     if session_ids:
         unread_stmt = (
@@ -380,7 +366,6 @@ async def get_messages(
     )
     messages = result_msg.scalars().all()
 
-    # ビジターからのメッセージを既読に
     await db.execute(
         models.Message.__table__.update()
         .where(
@@ -499,8 +484,6 @@ async def widget_create_or_get_session(
         )
 
     # --- owner を決める ---
-    # 1) owner_id が来ていればそれを優先
-    # 2) なければ最初の ADMIN ユーザーを使う（従来の挙動）
     owner = None
     if owner_id_raw is not None:
         try:
@@ -521,7 +504,6 @@ async def widget_create_or_get_session(
                 detail="指定された owner ユーザーが存在しません",
             )
     else:
-        # ★ フォールバック: 最初の ADMIN を使う
         result_user = await db.execute(
             select(models.User).where(models.User.role == models.UserRole.ADMIN)
         )
@@ -532,7 +514,6 @@ async def widget_create_or_get_session(
                 detail="ADMIN ユーザーが存在しません",
             )
 
-    # 同じ visitor_identifier & owner_user_id で OPEN を再利用
     result_session = await db.execute(
         select(models.Session).where(
             models.Session.visitor_identifier == visitor_identifier,
@@ -552,7 +533,7 @@ async def widget_create_or_get_session(
             created_at=now,
             last_active_at=now,
             owner_user_id=owner.id,
-            company_id=owner.company_id,  # owner の会社に紐づけ
+            company_id=owner.company_id,
         )
         db.add(session)
         await db.commit()
@@ -580,7 +561,6 @@ async def widget_get_messages(
     except ValueError:
         raise HTTPException(status_code=400, detail="session_id が不正です")
 
-    # セッションが存在するかだけ確認（会社・ユーザー制御はここではしない）
     result_session = await db.execute(
         select(models.Session).where(models.Session.id == session_uuid)
     )
@@ -621,7 +601,6 @@ async def close_session(
     db: AsyncSession = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    # セッション取得
     q = await db.execute(
         select(models.Session).where(models.Session.id == session_id)
     )
@@ -633,7 +612,6 @@ async def close_session(
     ):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # ステータス変更
     session.status = models.SessionStatus.CLOSED
     await db.commit()
     return {"status": "ok"}
@@ -644,7 +622,6 @@ async def widget_request_handoff(
     api_key: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
-    # api_key 検証
     q = await db.execute(
         select(models.ApiKey).where(
             models.ApiKey.key == api_key,
@@ -655,7 +632,6 @@ async def widget_request_handoff(
     if not key:
         raise HTTPException(status_code=401, detail="invalid api_key")
 
-    # session 検証
     try:
         session_uuid = UUID(session_id)
     except ValueError:
@@ -666,7 +642,6 @@ async def widget_request_handoff(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # 会社一致チェック
     if session.company_id != key.company_id:
         raise HTTPException(status_code=403, detail="forbidden")
 
@@ -675,7 +650,6 @@ async def widget_request_handoff(
     session.handoff_requested_at = now
     session.last_active_at = now
 
-    # ★ handoff 用のBotOptionの文言を探す（なければデフォルト）
     bot_text = "担当者をお呼びします。少々お待ちください。"
     q_opt = await db.execute(
         select(models.BotOption)
@@ -692,7 +666,6 @@ async def widget_request_handoff(
     if opt and opt.reply_text:
         bot_text = opt.reply_text
 
-    # ★ SYSTEMメッセージとして保存（履歴に残す）
     bot_msg = models.Message(
         session_id=session.id,
         sender_type=models.SenderType.OPERATOR,
@@ -708,9 +681,8 @@ async def widget_request_handoff(
     await db.commit()
     await db.refresh(bot_msg)
 
-    # ★ socketで即反映（ウィジェットがjoin済みなら一瞬で出る）
     try:
-        from .socket import sio  # あなたの構成に合わせてimport
+        from .socket import sio
         await sio.emit(
             "new_message",
             {
@@ -736,7 +708,6 @@ async def widget_request_handoff(
             room="operators",
         )
     except Exception as e:
-        # socket未接続でもOK（レスポンスで返すので）
         print("[handoff] emit failed:", e)
 
     return {
@@ -812,13 +783,11 @@ async def get_bot_settings(
     setting = q.scalar_one_or_none()
 
     if not setting:
-        # 初回は自動作成
         setting = models.BotSetting(company_id=current_user.company_id)
         db.add(setting)
         await db.commit()
         await db.refresh(setting)
 
-    # options も返す（relationship lazy="selectin" 前提）
     return schemas.BotSettingRead(
         enabled=setting.enabled,
         welcome_message=setting.welcome_message or "",
@@ -879,7 +848,6 @@ async def create_bot_option(
     if not current_user.company_id:
         raise HTTPException(status_code=400, detail="company_id not set")
 
-    # 会社の bot_settings を取得（なければ作成）
     q = await db.execute(
         select(models.BotSetting).where(models.BotSetting.company_id == current_user.company_id)
     )
@@ -890,7 +858,6 @@ async def create_bot_option(
         await db.commit()
         await db.refresh(setting)
 
-    # ★ company_id じゃなく bot_setting_id で紐づける
     opt = models.BotOption(
         bot_setting_id=setting.id,
         label=payload.label,
@@ -1003,7 +970,6 @@ async def get_widget_bot_settings(
         await db.commit()
         await db.refresh(setting)
 
-    # active だけ返す
     options = [o for o in (setting.options or []) if o.is_active]
 
     return schemas.BotSettingRead(
@@ -1078,14 +1044,12 @@ async def list_api_keys(
         select(models.ApiKey)
         .where(
             models.ApiKey.company_id == current_user.company_id,
-            models.ApiKey.user_id == current_user.id,   # ← “自分のキーだけ” ならこれ
-            # 会社の全員のキーも見たいなら上の行を消す
+            models.ApiKey.user_id == current_user.id,
         )
         .order_by(models.ApiKey.id.desc())
     )
     keys = q.scalars().all()
 
-    # ★一覧では key を全部返さない（漏洩しやすい）
     def mask(k: str):
         if not k:
             return ""
@@ -1116,7 +1080,7 @@ async def create_api_key(
         user_id=current_user.id,
         company_id=current_user.company_id,
         is_active=True,
-        name=(payload.get("name") or None),  # ★追加
+        name=(payload.get("name") or None),
     )
     db.add(api_key)
     await db.commit()
@@ -1125,7 +1089,7 @@ async def create_api_key(
     return {
         "id": api_key.id,
         "api_key": api_key.key,
-        "name": api_key.name,  # ★返してもOK（任意）
+        "name": api_key.name,
         "is_active": bool(api_key.is_active),
         "created_at": api_key.created_at.isoformat() if api_key.created_at else None,
     }
@@ -1144,7 +1108,7 @@ async def disable_api_key(
         select(models.ApiKey).where(
             models.ApiKey.id == api_key_id,
             models.ApiKey.company_id == current_user.company_id,
-            models.ApiKey.user_id == current_user.id,  # 自分のキーだけ操作可
+            models.ApiKey.user_id == current_user.id,
         )
     )
     key = q.scalar_one_or_none()
@@ -1196,12 +1160,12 @@ async def rotate_api_key(
 
     return {
         "id": new_key.id,
-        "api_key": new_key.key,  # ★rotate時もフル返却は1回だけ
+        "api_key": new_key.key,
         "is_active": True,
         "created_at": new_key.created_at.isoformat() if new_key.created_at else None,
     }
 
-from fastapi import Response  # もし未importなら
+from fastapi import Response
 
 @router.delete("/api-keys/{api_key_id}")
 async def delete_api_key(
@@ -1216,14 +1180,13 @@ async def delete_api_key(
         select(models.ApiKey).where(
             models.ApiKey.id == api_key_id,
             models.ApiKey.company_id == current_user.company_id,
-            models.ApiKey.user_id == current_user.id,  # 自分のキーだけ削除可
+            models.ApiKey.user_id == current_user.id,
         )
     )
     key = q.scalar_one_or_none()
     if not key:
         raise HTTPException(status_code=404, detail="api_key not found")
 
-    # ★ 安全のため「無効化済みのみ削除」を強制
     if key.is_active:
         raise HTTPException(status_code=400, detail="active key cannot be deleted")
 

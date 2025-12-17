@@ -55,14 +55,12 @@ async def visitor_message(sid, data):
     if not session_id_str:
         return
 
-    # テキストも画像もボタンもないなら無視
     if not content and not attachment_url and not bot_option_id:
         return
 
     session_uuid = uuid.UUID(session_id_str)
 
     async with AsyncSessionLocal() as db:
-        # セッション取得（company_id を知りたい）
         q_sess = await db.execute(
             select(models.Session).where(models.Session.id == session_uuid)
         )
@@ -70,7 +68,6 @@ async def visitor_message(sid, data):
         if not sess:
             return
 
-        # ボタン押下なら label を content に入れる（履歴に残す）
         option = None
         if bot_option_id is not None:
             q_opt = await db.execute(
@@ -82,10 +79,8 @@ async def visitor_message(sid, data):
             )
             option = q_opt.scalar_one_or_none()
             if option:
-                # visitorの発言として label を残す
                 content = option.label
 
-        # 1) VISITORメッセージ保存
         msg = models.Message(
             session_id=session_uuid,
             sender_type=models.SenderType.VISITOR,
@@ -97,7 +92,6 @@ async def visitor_message(sid, data):
         )
         db.add(msg)
 
-        # セッション更新（OPENに戻す）
         await db.execute(
             models.Session.__table__.update()
             .where(models.Session.id == session_uuid)
@@ -119,9 +113,7 @@ async def visitor_message(sid, data):
         await sio.emit("new_message", payload, room=session_id_str)
         await sio.emit("new_message", payload, room="operators")
 
-        # 2) Bot返信（SYSTEM）を作る（ボタン押下だけ）
         if option is not None:
-            # BotSetting が disabled なら返信しない
             q_setting = await db.execute(
                 select(models.BotSetting).where(models.BotSetting.company_id == sess.company_id)
             )
@@ -132,7 +124,6 @@ async def visitor_message(sid, data):
                 if option.action == "reply":
                     bot_text = option.reply_text or "承知しました。"
                 elif option.action == "link":
-                    # link は返信にURLを含める（好みで整形してOK）
                     if option.link_url:
                         bot_text = f"{option.reply_text or 'こちらをご覧ください。'}\n{option.link_url}"
                     else:
@@ -148,7 +139,7 @@ async def visitor_message(sid, data):
                     content=bot_text,
                     attachment_url=None,
                     created_at=datetime.utcnow(),
-                    is_read=True,     # systemは既読扱いでOK
+                    is_read=True,
                     read_at=datetime.utcnow(),
                 )
                 db.add(bot_msg)
@@ -196,7 +187,6 @@ async def operator_message(sid, data):
     session_uuid = uuid.UUID(session_id_str)
 
     async with AsyncSessionLocal() as db:
-        # セッション取得
         q = await db.execute(
             select(models.Session).where(models.Session.id == session_uuid)
         )
@@ -204,11 +194,9 @@ async def operator_message(sid, data):
         if not sess:
             return
 
-        # OPERATOR メッセージ保存
         msg = models.Message(
             session_id=session_uuid,
             sender_type=models.SenderType.OPERATOR,
-            sender_id=None,  # 必要なら operator user_id を入れる
             content=content,
             attachment_url=attachment_url,
             created_at=datetime.utcnow(),
@@ -217,7 +205,6 @@ async def operator_message(sid, data):
         )
         db.add(msg)
 
-        # セッション更新
         await db.execute(
             models.Session.__table__.update()
             .where(models.Session.id == session_uuid)
@@ -236,6 +223,5 @@ async def operator_message(sid, data):
             "created_at": msg.created_at.isoformat(),
         }
 
-        # ★ visitor と admin の両方へ配信
         await sio.emit("new_message", payload, room=session_id_str)
         await sio.emit("new_message", payload, room="operators")

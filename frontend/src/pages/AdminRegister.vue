@@ -96,7 +96,6 @@ const handleRegister = async () => {
 
   const data = await res.json();
 
-  // 返却: { access_token, token_type, user }
   localStorage.setItem("admin_token", data.access_token);
 
   router.push("/admin");
@@ -104,7 +103,6 @@ const handleRegister = async () => {
 </script>
 
 <style>
-/* Login と同じスタイルを再利用 */
 .auth-page {
   min-height: 100vh;
   margin: 0;

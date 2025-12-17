@@ -81,7 +81,6 @@ async def ensure_default_admin():
     - admin user: admin@example.com / admin123
     """
     async with AsyncSessionLocal() as db:
-        # 既に何か会社があれば何もしない（適当に 1 件取る）
         result_company = await db.execute(select(models.Company))
         company = result_company.scalars().first()
         if not company:
@@ -89,7 +88,6 @@ async def ensure_default_admin():
             db.add(company)
             await db.flush()  # company.id を確定させる
 
-        # admin ユーザーが存在するか
         result_user = await db.execute(
             select(models.User).where(models.User.email == "admin@example.com")
         )

@@ -1,14 +1,12 @@
 <!-- frontend/src/pages/Admin.vue -->
 <template>
   <div class="admin-layout">
-    <!-- ヘッダー -->
     <header class="admin-header">
       <h1>
         管理画面
         <span v-if="companyName">{{ companyName }}</span>
       </h1>
 
-      <!-- 右側：まとめメニュー -->
       <div class="header-actions">
         <button
           class="menu-btn"
@@ -67,7 +65,6 @@
       <aside class="session-list">
         <h2>セッション一覧</h2>
 
-        <!-- ★ クローズフィルタ -->
         <div class="session-filters">
           <label class="filter-toggle">
             <input type="checkbox" v-model="hideClosed" />
@@ -104,7 +101,6 @@
               </div>
             </div>
 
-            <!-- ★ 対応済みボタン -->
             <button
               v-if="s.status === 'OPEN'"
               class="close-btn"
@@ -123,7 +119,6 @@
         </div>
 
         <div v-else class="chat-panel">
-          <!-- ヘッダー（widget 風） -->
           <header class="chat-panel__header">
             <div class="chat-panel__header-left">
               <div class="chat-panel__avatar">
@@ -190,16 +185,14 @@
 
           <!-- 入力エリア -->
           <footer class="chat-panel__footer">
-            <!-- 📷 画像アップロードボタン -->
             <button
               type="button"
               class="chat-panel__button chat-panel__button--icon"
               @click="openFilePicker"
             >
-              📷
+              ＋
             </button>
 
-            <!-- 非表示のファイル input -->
             <input
               ref="fileInput"
               type="file"
@@ -208,7 +201,6 @@
               @change="handleFileChange"
             />
 
-            <!-- テキスト入力 -->
             <input
               v-model="inputText"
               type="text"
@@ -217,7 +209,6 @@
               @keyup.enter="sendMessage"
             />
 
-            <!-- 送信ボタン -->
             <button
               class="chat-panel__button"
               @click="sendMessage"
@@ -231,7 +222,6 @@
     </div>
   </div>
 
-  <!-- 🔍 画像プレビューモーダル -->
   <div
     v-if="previewImageUrl"
     class="image-preview"
@@ -268,13 +258,11 @@ const isConnected = ref(false);
 const hideClosed = ref(false);
 const currentUser = ref(null);
 
-// ★ まとめメニュー
 const menuOpen = ref(false);
 const toggleMenu = () => (menuOpen.value = !menuOpen.value);
 const closeMenu = () => (menuOpen.value = false);
 
 const onDocClick = (e) => {
-  // メニュー外クリックで閉じる
   if (!menuOpen.value) return;
   const btn = document.querySelector(".menu-btn");
   const panel = document.querySelector(".menu-panel");
@@ -284,12 +272,12 @@ const onDocClick = (e) => {
 };
 document.addEventListener("click", onDocClick);
 
-// 🔍 画像プレビュー用
+// 画像プレビュー用
 const previewImageUrl = ref(null);
 const openImagePreview = (url) => (previewImageUrl.value = url);
 const closeImagePreview = () => (previewImageUrl.value = null);
 
-const fileInput = ref(null); // 画像用 input
+const fileInput = ref(null);
 const openFilePicker = () => fileInput.value?.click();
 
 const handleFileChange = async (event) => {
@@ -364,7 +352,7 @@ const scrollMessagesToBottom = () => {
   });
 };
 
-// ★ クローズ非表示用のフィルタ済みセッション＋ソート
+// クローズ非表示用のフィルタ済みセッション＋ソート
 const filteredSessions = computed(() => {
   let list = sessions.value;
   if (hideClosed.value) list = list.filter((s) => s.status !== "CLOSED");
@@ -643,7 +631,6 @@ const displaySessionTitle = (s) => {
   font-weight: 600;
 }
 
-/* ★ まとめメニュー */
 .header-actions {
   position: relative;
   display: flex;
@@ -706,13 +693,11 @@ const displaySessionTitle = (s) => {
   background: #fff1f2;
 }
 
-/* 2カラム */
 .admin-body {
   flex: 1;
   display: flex;
 }
 
-/* 左：セッション一覧 */
 .session-list {
   width: 280px;
   background: #ffffff;
@@ -727,7 +712,6 @@ const displaySessionTitle = (s) => {
   color: #0f172a;
 }
 
-/* ★ フィルタ部分 */
 .session-filters {
   display: flex;
   justify-content: flex-end;
@@ -813,7 +797,6 @@ const displaySessionTitle = (s) => {
   margin-bottom: 8px;
 }
 
-/* 右：チャットパネル */
 .chat-detail {
   flex: 1;
   padding: 16px 24px;
@@ -827,7 +810,6 @@ const displaySessionTitle = (s) => {
   color: #94a3b8;
 }
 
-/* widget 風チャットパネル（大きめ） */
 .chat-panel {
   margin: 0;
   width: 100%;
@@ -843,7 +825,6 @@ const displaySessionTitle = (s) => {
   overflow: hidden;
 }
 
-/* ヘッダー */
 .chat-panel__header {
   padding: 12px 16px;
   border-bottom: 1px solid #bae6fd;
@@ -914,7 +895,6 @@ const displaySessionTitle = (s) => {
   background: #4fc3f7;
 }
 
-/* メッセージ一覧 */
 .chat-panel__messages {
   flex: 1;
   padding: 12px 16px;
@@ -925,7 +905,6 @@ const displaySessionTitle = (s) => {
   background: #f8fafc;
 }
 
-/* メッセージ共通 */
 .msg {
   display: flex;
 }
@@ -962,14 +941,12 @@ const displaySessionTitle = (s) => {
   line-height: 1.4;
 }
 
-/* オペレーター（自分） */
 .msg--me .msg__bubble {
   background: #e0f7fa;
   border: 1px solid #bae6fd;
   color: #0369a1;
 }
 
-/* 訪問者 */
 .msg--other .msg__bubble {
   background: #f1f5f9;
   border: 1px solid #e2e8f0;
@@ -1002,7 +979,6 @@ const displaySessionTitle = (s) => {
   color: #94a3b8;
 }
 
-/* 入力エリア */
 .chat-panel__footer {
   padding: 10px 12px;
   border-top: 1px solid #e2e8f0;
@@ -1042,7 +1018,6 @@ const displaySessionTitle = (s) => {
   cursor: default;
 }
 
-/* メッセージアニメーション */
 .msg-enter-active {
   transition: all 0.16s ease-out;
 }
@@ -1090,22 +1065,18 @@ const displaySessionTitle = (s) => {
   display: block;
 }
 
-/* 自分の画像は右寄せ */
 .msg--me .msg__image-wrapper {
   margin-left: auto;
 }
 
-/* 相手の画像は左寄せ */
 .msg--other .msg__image-wrapper {
   margin-right: auto;
 }
 
-/* 📷ボタンをちょい小さく */
 .chat-panel__button--icon {
   padding-inline: 10px;
 }
 
-/* モーダル背景 */
 .image-preview {
   position: fixed;
   inset: 0;
@@ -1116,14 +1087,12 @@ const displaySessionTitle = (s) => {
   z-index: 2000;
 }
 
-/* 内側コンテナ（少し余白を持たせる） */
 .image-preview__inner {
   position: relative;
   max-width: 80%;
   max-height: 80%;
 }
 
-/* 画像本体 */
 .image-preview__img {
   max-width: 100%;
   max-height: 100%;
@@ -1131,7 +1100,6 @@ const displaySessionTitle = (s) => {
   display: block;
 }
 
-/* 閉じるボタン */
 .image-preview__close {
   position: absolute;
   top: 8px;

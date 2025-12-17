@@ -10,20 +10,13 @@ import AdminInstall from "./pages/AdminInstall.vue";
 import AdminApiKeys from "./pages/AdminApiKeys.vue";
 
 const routes = [
-  // ウィジェット
   { path: "/widget", component: WidgetPage },
-
-  // 管理画面（ログインが不要なページ）
   { path: "/admin/login", component: AdminLogin },
   { path: "/admin/register", component: AdminRegister },
-
-  // 管理画面（ログイン必須）
   { path: "/admin", component: Admin },
   { path: "/admin/install", component: AdminInstall },
   { path: "/admin/bot", component: AdminBotSettings },
   { path: "/admin/api-keys", component: AdminApiKeys },
-
-  // それ以外 → /widget へ
   { path: "/:pathMatch(.*)*", redirect: "/widget" },
 ];
 
@@ -37,20 +30,16 @@ router.beforeEach((to, from, next) => {
   const token = localStorage.getItem("admin_token");
   const isAdminArea = to.path.startsWith("/admin");
 
-  // トークンなしでも入っていい admin 配下のパス
   const publicAdminPaths = ["/admin/login", "/admin/register"];
 
-  // 1) admin 配下 ＆ 未ログイン ＆ 公開パス以外 → /admin/login へ
   if (isAdminArea && !token && !publicAdminPaths.includes(to.path)) {
     return next("/admin/login");
   }
 
-  // 2) ログイン済みで login / register に来たら /admin にリダイレクト
   if (token && publicAdminPaths.includes(to.path)) {
     return next("/admin");
   }
 
-  // 3) それ以外はそのまま
   next();
 });
 

@@ -4,16 +4,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .api.routes import router as core_router
-from .api import routes_upload  # ★ 追加
+from .api import routes_upload
 from .socket import sio
 import socketio
 
-# ① FastAPI 本体
 fastapi_app = FastAPI()
 
 fastapi_app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ← 開発中だけ
+    allow_origins=["*"], # 本番環境では適切に設定すること
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

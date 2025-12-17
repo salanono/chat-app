@@ -70,8 +70,8 @@ const pushLocalMessage = ({
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const notifySize = () => {
-  const launcherH = 68; // ランチャーの高さ（だいたい）
-  const gap = 16; // 余白（お好み）
+  const launcherH = 68;
+  const gap = 16;
   const widgetW = 330;
   const widgetH = 465;
 
@@ -98,8 +98,8 @@ const botEnabled = ref(false);
 const botWelcome = ref("");
 const botOptions = ref([]);
 
-const canUseBot = computed(() => !!apiKey); // bot設定APIは api_key 前提
-const mode = ref("bot"); // "bot" | "operator"
+const canUseBot = computed(() => !!apiKey);
+const mode = ref("bot");
 
 const fetchBotConfig = async () => {
   if (!apiKey) {
@@ -125,7 +125,6 @@ const fetchBotConfig = async () => {
 
   botEnabled.value = !!data.enabled;
   botWelcome.value = data.welcome_message || "";
-  // ★ active だけ返すAPIにしてるならここはそのまま
   botOptions.value = Array.isArray(data.options) ? data.options : [];
 };
 
@@ -149,7 +148,7 @@ const onBotOptionClick = async (opt) => {
     return;
   }
 
-  // 通常 reply_text（typing演出）
+  // 通常 reply_text
   if (opt.reply_text) {
     pushLocalMessage({ sender_type: "system", content: "…" });
     await sleep(250);
@@ -242,7 +241,6 @@ const connectSocket = () => {
       sender_type: normalizeSenderType(msg.sender_type),
     };
 
-    // ★ 自分(visitor)が送ったメッセージのエコーなら pending を探して置換
     if (normalized.sender_type === "visitor") {
       const idx = messages.value.findIndex(
         (m) =>
@@ -258,7 +256,6 @@ const connectSocket = () => {
       }
     }
 
-    // 通常追加
     messages.value.push(normalized);
     scrollToBottom();
   });
@@ -268,7 +265,6 @@ const connectSocket = () => {
 const startOperatorChat = async () => {
   if (mode.value === "operator") return;
 
-  // 1) セッション作成（ここで初めてDBに触る）
   await fetchOrCreateSession();
   if (!sessionId.value) {
     pushLocalMessage({
@@ -278,7 +274,6 @@ const startOperatorChat = async () => {
     return;
   }
 
-  // 2) handoff 요청（ここで初めてAdminに出る）
   const res = await fetch(
     `${API_BASE}/api/widget/sessions/${
       sessionId.value
@@ -296,7 +291,6 @@ const startOperatorChat = async () => {
     return;
   }
 
-  // ★ ここ追加：サーバーが返した最初のメッセージを表示
   if (data?.message?.content) {
     pushLocalMessage({ sender_type: "system", content: data.message.content });
   } else {
@@ -306,17 +300,14 @@ const startOperatorChat = async () => {
     });
   }
 
-  // 3) socket接続 & join
   connectSocket();
 
-  // 4) UI案内（必要なら）
   mode.value = "operator";
   pushLocalMessage({
     sender_type: "system",
     content: "オペレーターに接続しました。少々お待ちください。",
   });
 
-  // 5)（任意）履歴ロード
   await loadHistory();
 };
 
@@ -328,7 +319,6 @@ const sendMessage = async () => {
   if (!text) return;
 
   if (mode.value === "bot") {
-    // ここはそのまま
     pushLocalMessage({ sender_type: "visitor", content: text });
     pushLocalMessage({
       sender_type: "system",
@@ -341,7 +331,6 @@ const sendMessage = async () => {
 
   if (!socket.value || !isConnected.value || !sessionId.value) return;
 
-  // ★ pending を入れる
   const localId = `pending_${Date.now()}_${Math.random()
     .toString(16)
     .slice(2)}`;
@@ -413,7 +402,6 @@ const uploadImage = async (file) => {
     return;
   }
 
-  // UI先出し（画像も即表示）
   const localId = `pending_${Date.now()}_${Math.random()
     .toString(16)
     .slice(2)}`;
@@ -456,7 +444,7 @@ onMounted(async () => {
   if (botEnabled.value && botWelcome.value && messages.value.length === 0) {
     pushLocalMessage({ sender_type: "system", content: botWelcome.value });
   }
-  notifySize(); // ★初期表示で親iframeをサイズ合わせ
+  notifySize();
 });
 
 onBeforeUnmount(() => {
@@ -664,18 +652,18 @@ onBeforeUnmount(() => {
   height: 64px;
   padding: 0;
 
-  display: flex; /* ★これ */
-  align-items: center; /* ★縦中央 */
-  justify-content: center; /* ★横中央 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
 
-  font-size: 24px; /* アイコン少し大きく */
-  line-height: 1; /* 文字のズレ防止 */
+  font-size: 24px;
+  line-height: 1;
 }
 
 .widget-container {
   position: absolute;
   right: 0;
-  bottom: 72px; /* ランチャー(56) + 余白(16) */
+  bottom: 72px;
   z-index: 30;
 }
 
@@ -842,7 +830,6 @@ onBeforeUnmount(() => {
   text-align: left;
 }
 
-/* 画像 */
 .msg__image-wrapper {
   max-width: 70%;
   cursor: pointer;
@@ -866,7 +853,6 @@ onBeforeUnmount(() => {
   margin-right: auto;
 }
 
-/* 空状態 */
 .widget__empty {
   margin: auto;
   text-align: center;
@@ -874,7 +860,6 @@ onBeforeUnmount(() => {
   color: #94a3b8;
 }
 
-/* 入力 */
 .widget__footer {
   padding: 10px 12px;
   border-top: 1px solid #e2e8f0;
@@ -909,7 +894,6 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-/* Bot選択肢（横スクロール） */
 .bot-options--inline {
   padding: 8px 12px;
   border-top: 1px solid #e2e8f0;
@@ -935,7 +919,6 @@ onBeforeUnmount(() => {
   background: #f1f5f9;
 }
 
-/* 開閉アニメ */
 .widget-panel-enter-active,
 .widget-panel-leave-active {
   transition: opacity 0.18s ease, transform 0.18s ease;
@@ -947,7 +930,6 @@ onBeforeUnmount(() => {
   transform: translateY(8px) scale(0.97);
 }
 
-/* メッセージ追加アニメ */
 .msg-enter-active {
   transition: all 0.16s ease-out;
 }
@@ -957,7 +939,6 @@ onBeforeUnmount(() => {
   transform: translateY(4px) scale(0.98);
 }
 
-/* 画像プレビュー */
 .image-preview {
   position: fixed;
   inset: 0;
@@ -998,7 +979,6 @@ onBeforeUnmount(() => {
 </style>
 
 <style>
-/* ★ これを追加：iframe内ページ全体を透明にする */
 html,
 body {
   background: transparent !important;

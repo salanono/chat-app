@@ -21,7 +21,6 @@
     <p v-if="error" class="error">{{ error }}</p>
 
     <div v-if="!loading" class="grid">
-      <!-- 左：Bot全体設定 -->
       <section class="card">
         <h2 class="card-title">基本設定</h2>
 
@@ -45,7 +44,6 @@
         </div>
       </section>
 
-      <!-- 右：選択肢一覧 -->
       <section class="card">
         <div class="card-head">
           <h2 class="card-title">選択肢（ボタン）</h2>
@@ -111,7 +109,6 @@
       </section>
     </div>
 
-    <!-- モーダル -->
     <div v-if="modal.open" class="modal" @click.self="closeModal">
       <div class="modal__card">
         <div class="modal__head">
@@ -204,7 +201,7 @@ const form = ref({
   welcome_message: "",
 });
 
-const options = ref([]); // BotOptionRead[]
+const options = ref([]);
 
 const optionsSorted = computed(() => {
   return [...options.value].sort(
@@ -288,7 +285,6 @@ const saveSetting = async () => {
     }
 
     const data = await res.json();
-    // サーバー側の最新を反映（options も一緒に返ってくる想定）
     form.value.enabled = !!data.enabled;
     form.value.welcome_message = data.welcome_message || "";
     options.value = data.options || options.value;
@@ -318,11 +314,9 @@ const swapOrder = async (a, b) => {
   const aOrder = a.sort_order ?? 0;
   const bOrder = b.sort_order ?? 0;
 
-  // 楽観的更新
   a.sort_order = bOrder;
   b.sort_order = aOrder;
 
-  // 2つPATCH（PUT）
   try {
     await Promise.all([
       fetch(`${API_BASE}/api/bot/options/${a.id}`, {
@@ -338,7 +332,6 @@ const swapOrder = async (a, b) => {
     ]);
   } catch (e) {
     console.error(e);
-    // 失敗したら取り直し
     await fetchBotSettings();
   }
 };
@@ -360,7 +353,7 @@ const moveDown = async (opt) => {
 // --- モーダル（追加・編集） ---
 const modal = ref({
   open: false,
-  mode: "create", // "create" | "edit"
+  mode: "create",
   form: {
     id: null,
     label: "",
@@ -422,7 +415,6 @@ const submitModal = async () => {
 
   try {
     if (modal.value.mode === "create") {
-      // 末尾に追加したいので sort_order を最大+10 にする（雑に安全）
       const maxOrder = options.value.reduce(
         (m, o) => Math.max(m, o.sort_order ?? 0),
         0
@@ -719,7 +711,6 @@ onMounted(async () => {
   padding: 10px 0;
 }
 
-/* switch */
 .switch {
   display: inline-flex;
   align-items: center;
@@ -761,7 +752,6 @@ onMounted(async () => {
   color: #0f172a;
 }
 
-/* modal */
 .modal {
   position: fixed;
   inset: 0;

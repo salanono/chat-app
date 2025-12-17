@@ -1,3 +1,4 @@
+<!-- frontend/src/pages/AdminApiKeys.vue -->
 <script setup>
 import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
@@ -11,7 +12,7 @@ const error = ref("");
 
 const keys = ref([]);
 const newKeyName = ref("");
-const newlyCreatedKey = ref(""); // 作成直後だけ表示＆コピー用
+const newlyCreatedKey = ref("");
 
 const authHeaders = () => {
   const token = localStorage.getItem(TOKEN_KEY);
