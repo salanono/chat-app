@@ -64,7 +64,7 @@ const createKey = async () => {
     const res = await fetch(`${API_BASE}/api/api-keys`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({}), // ← nameなし
+      body: JSON.stringify({ name: newKeyName.value?.trim() || null }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.detail || `failed: ${res.status}`);
@@ -121,6 +121,30 @@ const rotateKey = async (id) => {
     if (!res.ok) throw new Error(data?.detail || `failed: ${res.status}`);
 
     newlyCreatedKey.value = data.api_key || "";
+    await fetchKeys();
+  } catch (e) {
+    error.value = String(e?.message || e);
+  }
+};
+
+const deleteKey = async (id) => {
+  if (!confirm("この無効化されたAPIキーを削除しますか？（元に戻せません）"))
+    return;
+
+  error.value = "";
+  const headers = authHeaders();
+  if (!headers) {
+    router.push("/admin/login");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/api-keys/${id}`, {
+      method: "DELETE",
+      headers,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.detail || `failed: ${res.status}`);
     await fetchKeys();
   } catch (e) {
     error.value = String(e?.message || e);
@@ -216,6 +240,13 @@ onMounted(fetchKeys);
                 :disabled="!k.is_active"
               >
                 無効化
+              </button>
+              <button
+                v-if="!k.is_active"
+                class="btn small danger"
+                @click="deleteKey(k.id)"
+              >
+                削除
               </button>
             </td>
           </tr>

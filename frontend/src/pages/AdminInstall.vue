@@ -11,15 +11,6 @@ const loading = ref(true);
 const error = ref("");
 const apiKey = ref("");
 
-const embedIframe = computed(() => {
-  if (!apiKey.value) return "";
-  return `<iframe
-  src="http://localhost:5173/widget?api_key=${apiKey.value}"
-  style="position:fixed;right:20px;bottom:20px;width:360px;height:520px;border:none;z-index:999999;border-radius:16px;box-shadow:0 10px 30px rgba(15,23,42,.25);"
-  allow="clipboard-read; clipboard-write"
-></iframe>`;
-});
-
 const copy = async (text) => {
   try {
     await navigator.clipboard.writeText(text);
@@ -36,14 +27,11 @@ const fetchApiKey = async () => {
   const token = localStorage.getItem(TOKEN_KEY);
   if (!token) {
     loading.value = false;
-    error.value = "ログイン情報が見つかりません。";
     router.push("/admin/login");
     return;
   }
 
   try {
-    // ✅ バックエンドに合わせてここは変更してOK
-    // 例: /api/widget/api-key とか /api/companies/me/api-key とか
     const res = await fetch(`${API_BASE}/api/embed-key`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -51,7 +39,7 @@ const fetchApiKey = async () => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.detail || `failed: ${res.status}`);
 
-    apiKey.value = data.api_key; // { api_key: "..." }想定
+    apiKey.value = data.api_key;
   } catch (e) {
     error.value = String(e?.message || e);
   } finally {
@@ -77,19 +65,12 @@ onMounted(fetchApiKey);
         <button class="btn ghost" @click="router.push('/admin')">
           管理画面
         </button>
-        <button
-          class="btn"
-          @click="copy(embedIframe.value)"
-          :disabled="!apiKey"
-        >
-          iframeをコピー
-        </button>
       </div>
     </div>
 
     <p class="desc">
-      まずは最短で動く <b>iframe版</b> を貼り付けてください。（script
-      1行版は次に作る）
+      以下の <b>1行スクリプト</b> を、Webサイトの
+      <code>&lt;body&gt;</code> 終了直前に貼り付けてください。
     </p>
 
     <div v-if="loading" class="card">読み込み中…</div>
@@ -103,18 +84,15 @@ onMounted(fetchApiKey);
 
     <div v-else class="card">
       <div class="row">
-        <h2 class="subtitle">1行スクリプト（おすすめ）</h2>
+        <h2 class="subtitle">設置用スクリプト（1行）</h2>
         <button class="btn" @click="copy(embedScript)">コピー</button>
       </div>
-      <pre class="code">{{ embedScript }}</pre>
-    </div>
 
-    <div v-if="!loading && !error" class="card" style="margin-top: 16px">
-      <div class="row">
-        <h2 class="subtitle">iframe設置コード（デバッグ用）</h2>
-        <button class="btn" @click="copy(embedIframe)">コピー</button>
-      </div>
-      <pre class="code">{{ embedIframe }}</pre>
+      <pre class="code">{{ embedScript }}</pre>
+
+      <p style="margin-top: 8px; font-size: 12px; color: #64748b">
+        ※ このコードはサイトごとに固有です。外部に共有しないでください。
+      </p>
     </div>
   </div>
 </template>

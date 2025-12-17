@@ -666,7 +666,7 @@ async def widget_request_handoff(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # ★ 会社一致チェック（これ超重要）
+    # 会社一致チェック
     if session.company_id != key.company_id:
         raise HTTPException(status_code=403, detail="forbidden")
 
@@ -675,8 +675,79 @@ async def widget_request_handoff(
     session.handoff_requested_at = now
     session.last_active_at = now
 
+    # ★ handoff 用のBotOptionの文言を探す（なければデフォルト）
+    bot_text = "担当者をお呼びします。少々お待ちください。"
+    q_opt = await db.execute(
+        select(models.BotOption)
+        .join(models.BotSetting, models.BotOption.bot_setting_id == models.BotSetting.id)
+        .where(
+            models.BotSetting.company_id == session.company_id,
+            models.BotOption.is_active.is_(True),
+            models.BotOption.action == "handoff",
+        )
+        .order_by(models.BotOption.sort_order.asc(), models.BotOption.id.asc())
+        .limit(1)
+    )
+    opt = q_opt.scalar_one_or_none()
+    if opt and opt.reply_text:
+        bot_text = opt.reply_text
+
+    # ★ SYSTEMメッセージとして保存（履歴に残す）
+    bot_msg = models.Message(
+        session_id=session.id,
+        sender_type=models.SenderType.OPERATOR,
+        sender_id=None,
+        content=bot_text,
+        attachment_url=None,
+        created_at=now,
+        is_read=True,
+        read_at=now,
+    )
+    db.add(bot_msg)
+
     await db.commit()
-    return {"ok": True}
+    await db.refresh(bot_msg)
+
+    # ★ socketで即反映（ウィジェットがjoin済みなら一瞬で出る）
+    try:
+        from .socket import sio  # あなたの構成に合わせてimport
+        await sio.emit(
+            "new_message",
+            {
+                "id": str(bot_msg.id),
+                "session_id": str(bot_msg.session_id),
+                "sender_type": "system",
+                "content": bot_msg.content,
+                "attachment_url": None,
+                "created_at": bot_msg.created_at.isoformat(),
+            },
+            room=str(session.id),
+        )
+        await sio.emit(
+            "new_message",
+            {
+                "id": str(bot_msg.id),
+                "session_id": str(bot_msg.session_id),
+                "sender_type": "system",
+                "content": bot_msg.content,
+                "attachment_url": None,
+                "created_at": bot_msg.created_at.isoformat(),
+            },
+            room="operators",
+        )
+    except Exception as e:
+        # socket未接続でもOK（レスポンスで返すので）
+        print("[handoff] emit failed:", e)
+
+    return {
+        "ok": True,
+        "message": {
+            "id": bot_msg.id,
+            "sender_type": "SYSTEM",
+            "content": bot_msg.content,
+            "created_at": bot_msg.created_at.isoformat(),
+        },
+    }
 
 @router.get("/embed/{owner_id}.js")
 async def get_embed_script(owner_id: int):
@@ -941,10 +1012,10 @@ async def get_widget_bot_settings(
         options=options,
     )
 
+from urllib.parse import quote
+
 @router.get("/embed.js")
-async def get_embed_js(
-    api_key: str = Query(...),
-):
+async def get_embed_js(api_key: str = Query(...)):
     js = f"""
 (function() {{
   var d = document;
@@ -955,16 +1026,28 @@ async def get_embed_js(
     var iframe = d.createElement('iframe');
     iframe.id = 'chat-widget-frame';
     iframe.src = 'http://localhost:5173/widget?api_key={api_key}';
+
+    // ★ 最初はランチャーサイズ（小さく）
     iframe.style.position = 'fixed';
     iframe.style.right = '20px';
     iframe.style.bottom = '20px';
-    iframe.style.width = '360px';
-    iframe.style.height = '520px';
+    iframe.style.width = '56px';
+    iframe.style.height = '56px';
     iframe.style.border = 'none';
+    iframe.style.background = 'transparent';
     iframe.style.zIndex = '999999';
     iframe.style.borderRadius = '16px';
-    iframe.style.boxShadow = '0 10px 30px rgba(15,23,42,0.25)';
+    iframe.style.overflow = 'hidden';
     iframe.allow = 'clipboard-read; clipboard-write';
+
+    // ★ Widget からの postMessage で iframe をリサイズ
+    window.addEventListener('message', function(ev) {{
+      var data = ev.data || {{}};
+      if (data.type !== 'CHAT_WIDGET_RESIZE') return;
+
+      if (typeof data.width === 'number') iframe.style.width = data.width + 'px';
+      if (typeof data.height === 'number') iframe.style.height = data.height + 'px';
+    }});
 
     d.body.appendChild(iframe);
   }}
@@ -1033,6 +1116,7 @@ async def create_api_key(
         user_id=current_user.id,
         company_id=current_user.company_id,
         is_active=True,
+        name=(payload.get("name") or None),  # ★追加
     )
     db.add(api_key)
     await db.commit()
@@ -1040,7 +1124,8 @@ async def create_api_key(
 
     return {
         "id": api_key.id,
-        "api_key": api_key.key,  # ★作成時だけフル返却
+        "api_key": api_key.key,
+        "name": api_key.name,  # ★返してもOK（任意）
         "is_active": bool(api_key.is_active),
         "created_at": api_key.created_at.isoformat() if api_key.created_at else None,
     }
@@ -1115,6 +1200,37 @@ async def rotate_api_key(
         "is_active": True,
         "created_at": new_key.created_at.isoformat() if new_key.created_at else None,
     }
+
+from fastapi import Response  # もし未importなら
+
+@router.delete("/api-keys/{api_key_id}")
+async def delete_api_key(
+    api_key_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not current_user.company_id:
+        raise HTTPException(status_code=400, detail="company_id not set")
+
+    q = await db.execute(
+        select(models.ApiKey).where(
+            models.ApiKey.id == api_key_id,
+            models.ApiKey.company_id == current_user.company_id,
+            models.ApiKey.user_id == current_user.id,  # 自分のキーだけ削除可
+        )
+    )
+    key = q.scalar_one_or_none()
+    if not key:
+        raise HTTPException(status_code=404, detail="api_key not found")
+
+    # ★ 安全のため「無効化済みのみ削除」を強制
+    if key.is_active:
+        raise HTTPException(status_code=400, detail="active key cannot be deleted")
+
+    await db.delete(key)
+    await db.commit()
+
+    return {"ok": True}
 
 @router.post("/sessions/{session_id}/handoff")
 async def request_handoff(

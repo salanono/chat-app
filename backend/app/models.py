@@ -135,15 +135,14 @@ class ApiKey(Base):
     id = Column(Integer, primary_key=True, index=True)
     key = Column(String(64), unique=True, index=True, nullable=False)
 
+    name = Column(String(255), nullable=True)  # ★追加
+
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
 
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     revoked_at = Column(DateTime, nullable=True)
-
-    user = relationship("User", backref="api_keys")
-    company = relationship("Company", backref="api_keys")
 
 class BotSetting(Base):
     __tablename__ = "bot_settings"

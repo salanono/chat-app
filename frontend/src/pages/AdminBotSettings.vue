@@ -818,4 +818,14 @@ onMounted(async () => {
   gap: 8px;
   background: #fff;
 }
+
+* {
+  box-sizing: border-box;
+}
+
+textarea,
+input,
+select {
+  max-width: 100%;
+}
 </style>

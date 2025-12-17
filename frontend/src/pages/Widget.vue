@@ -69,9 +69,26 @@ const pushLocalMessage = ({
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ---- 開閉 ----
+const notifySize = () => {
+  const launcherH = 68; // ランチャーの高さ（だいたい）
+  const gap = 16; // 余白（お好み）
+  const widgetW = 330;
+  const widgetH = 465;
+
+  window.parent.postMessage(
+    {
+      type: "CHAT_WIDGET_RESIZE",
+      width: isOpen.value ? widgetW : launcherH,
+      height: isOpen.value ? widgetH + launcherH + gap : launcherH,
+      open: isOpen.value,
+    },
+    "*"
+  );
+};
+
 const toggleOpen = () => {
   isOpen.value = !isOpen.value;
+  notifySize();
 };
 
 // --------------------
@@ -268,12 +285,25 @@ const startOperatorChat = async () => {
     }/handoff?api_key=${encodeURIComponent(apiKey)}`,
     { method: "POST" }
   );
+
+  const data = await res.json().catch(() => ({}));
+
   if (!res.ok) {
     pushLocalMessage({
       sender_type: "system",
       content: "オペレーター接続の開始に失敗しました。",
     });
     return;
+  }
+
+  // ★ ここ追加：サーバーが返した最初のメッセージを表示
+  if (data?.message?.content) {
+    pushLocalMessage({ sender_type: "system", content: data.message.content });
+  } else {
+    pushLocalMessage({
+      sender_type: "system",
+      content: "担当者をお呼びします。少々お待ちください。",
+    });
   }
 
   // 3) socket接続 & join
@@ -413,15 +443,15 @@ const formatTime = (isoString) => {
 };
 
 // ---- 初期化 ----
-onMounted(async () => {
-  await fetchBotConfig();
 
-  // Botウェルカム（ローカル表示）
+onMounted(async () => {
+  console.log("[widget] href:", window.location.href);
+  console.log("[widget] apiKey:", apiKey);
+  await fetchBotConfig();
   if (botEnabled.value && botWelcome.value && messages.value.length === 0) {
     pushLocalMessage({ sender_type: "system", content: botWelcome.value });
   }
-
-  // Botが無効なら、最初から operator に繋ぐ導線を出したい場合はここで startOperatorChat() でもOK
+  notifySize(); // ★初期表示で親iframeをサイズ合わせ
 });
 
 onBeforeUnmount(() => {
@@ -432,8 +462,12 @@ onBeforeUnmount(() => {
 <template>
   <div class="widget-page">
     <!-- ランチャーボタン -->
-    <button class="widget-launcher" @click="toggleOpen">
-      <span v-if="!isOpen">💬 チャットで相談</span>
+    <button
+      class="widget-launcher"
+      :class="{ closed: !isOpen }"
+      @click="toggleOpen"
+    >
+      <span v-if="!isOpen">💬</span>
       <span v-else>✕ 閉じる</span>
     </button>
 
@@ -591,7 +625,7 @@ onBeforeUnmount(() => {
   </div>
 </template>
 
-<style>
+<style scoped>
 .widget-page {
   position: relative;
   width: 100%;
@@ -618,15 +652,30 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
+.widget-launcher.closed {
+  right: 0;
+  bottom: 0;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+
+  display: flex;              /* ★これ */
+  align-items: center;        /* ★縦中央 */
+  justify-content: center;    /* ★横中央 */
+
+  font-size: 24px;            /* アイコン少し大きく */
+  line-height: 1;             /* 文字のズレ防止 */
+}
+
 .widget-container {
   position: absolute;
   right: 0;
-  bottom: 60px;
+  bottom: 72px; /* ランチャー(56) + 余白(16) */
   z-index: 30;
 }
 
 .widget {
-  width: 360px;
+  width: 327px;
   height: 480px;
   max-height: calc(100vh - 80px);
   background: #ffffff;
@@ -940,5 +989,25 @@ onBeforeUnmount(() => {
   color: #fff;
   font-size: 16px;
   line-height: 1;
+}
+</style>
+
+<style>
+/* ★ これを追加：iframe内ページ全体を透明にする */
+html,
+body {
+  background: transparent !important;
+  margin: 0;
+  padding: 0;
+}
+
+#app {
+  background: transparent !important;
+}
+
+html,
+body,
+#app {
+  height: 100%;
 }
 </style>

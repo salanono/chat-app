@@ -145,3 +145,17 @@ class BotOptionUpdate(BaseModel):
     link_url: str | None = None
     sort_order: int | None = None
     is_active: bool | None = None
+
+class ApiKeyRead(BaseModel):
+    id: int
+    key: str
+    name: str | None = None
+    is_active: bool
+    created_at: datetime
+
+class ApiKeyCreate(BaseModel):
+    name: str | None = None
+
+class ApiKeyUpdate(BaseModel):
+    name: str | None = None
+    is_active: bool | None = None

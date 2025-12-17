@@ -7,17 +7,59 @@
         管理画面
         <span v-if="companyName">{{ companyName }}</span>
       </h1>
-      <button class="logout-btn" @click="router.push('/admin/api-keys')">
-        APIキー
-      </button>
-      <button class="logout-btn" @click="router.push('/admin/install')">
-        設置コード
-      </button>
-      <!-- Admin.vue の header の中に追加（例） -->
-      <button class="logout-btn" @click="router.push('/admin/bot')">
-        Bot設定
-      </button>
-      <button class="logout-btn" @click="logout">ログアウト</button>
+
+      <!-- 右側：まとめメニュー -->
+      <div class="header-actions">
+        <button
+          class="menu-btn"
+          type="button"
+          @click.stop="toggleMenu"
+          aria-label="メニュー"
+        >
+          ☰
+        </button>
+
+        <div v-if="menuOpen" class="menu-panel" @click.stop>
+          <button
+            class="menu-item"
+            type="button"
+            @click="
+              router.push('/admin/api-keys');
+              closeMenu();
+            "
+          >
+            APIキー
+          </button>
+
+          <button
+            class="menu-item"
+            type="button"
+            @click="
+              router.push('/admin/install');
+              closeMenu();
+            "
+          >
+            設置コード
+          </button>
+
+          <button
+            class="menu-item"
+            type="button"
+            @click="
+              router.push('/admin/bot');
+              closeMenu();
+            "
+          >
+            Bot設定
+          </button>
+
+          <div class="menu-sep"></div>
+
+          <button class="menu-item danger" type="button" @click="logout">
+            ログアウト
+          </button>
+        </div>
+      </div>
     </header>
 
     <div class="admin-body">
@@ -188,6 +230,7 @@
       </main>
     </div>
   </div>
+
   <!-- 🔍 画像プレビューモーダル -->
   <div
     v-if="previewImageUrl"
@@ -196,7 +239,6 @@
   >
     <div class="image-preview__inner">
       <img :src="previewImageUrl" alt="preview" class="image-preview__img" />
-
       <button class="image-preview__close" @click="closeImagePreview">✕</button>
     </div>
   </div>
@@ -208,7 +250,6 @@ import { useRouter } from "vue-router";
 import { io } from "socket.io-client";
 
 const API_BASE = "http://localhost:8000";
-
 const router = useRouter();
 
 const sessions = ref([]);
@@ -225,35 +266,36 @@ const socket = ref(null);
 const isConnected = ref(false);
 
 const hideClosed = ref(false);
-
 const currentUser = ref(null);
+
+// ★ まとめメニュー
+const menuOpen = ref(false);
+const toggleMenu = () => (menuOpen.value = !menuOpen.value);
+const closeMenu = () => (menuOpen.value = false);
+
+const onDocClick = (e) => {
+  // メニュー外クリックで閉じる
+  if (!menuOpen.value) return;
+  const btn = document.querySelector(".menu-btn");
+  const panel = document.querySelector(".menu-panel");
+  if (!btn || !panel) return;
+  if (btn.contains(e.target) || panel.contains(e.target)) return;
+  closeMenu();
+};
+document.addEventListener("click", onDocClick);
 
 // 🔍 画像プレビュー用
 const previewImageUrl = ref(null);
-
-const openImagePreview = (url) => {
-  previewImageUrl.value = url;
-};
-
-const closeImagePreview = () => {
-  previewImageUrl.value = null;
-};
+const openImagePreview = (url) => (previewImageUrl.value = url);
+const closeImagePreview = () => (previewImageUrl.value = null);
 
 const fileInput = ref(null); // 画像用 input
-
-const openFilePicker = () => {
-  if (fileInput.value) {
-    fileInput.value.click();
-  }
-};
+const openFilePicker = () => fileInput.value?.click();
 
 const handleFileChange = async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
-
   await uploadImage(file);
-
-  // 同じファイルを連続選択できるようにリセット
   event.target.value = "";
 };
 
@@ -275,7 +317,6 @@ const uploadImage = async (file) => {
       method: "POST",
       body: form,
     });
-
     const data = await res.json();
 
     if (!res.ok || !data.url) {
@@ -284,11 +325,10 @@ const uploadImage = async (file) => {
       return;
     }
 
-    // ✅ アップロード成功 → 画像付きメッセージとして送信
     socket.value.emit("operator_message", {
       session_id: selectedSessionId.value,
-      content: "", // テキストなし
-      attachment_url: data.url, // サーバーから返ってきた URL
+      content: "",
+      attachment_url: data.url,
     });
   } catch (e) {
     console.error(e);
@@ -303,11 +343,10 @@ const fetchMe = async () => {
   const res = await fetch(`${API_BASE}/api/auth/me`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-
   if (!res.ok) return;
-
   currentUser.value = await res.json();
 };
+
 // ---- 共通の時刻フォーマット（JST） ----
 const formatTime = (isoString) => {
   if (!isoString) return "";
@@ -321,39 +360,24 @@ const formatTime = (isoString) => {
 const scrollMessagesToBottom = () => {
   requestAnimationFrame(() => {
     const container = document.querySelector(".chat-panel__messages");
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
+    if (container) container.scrollTop = container.scrollHeight;
   });
 };
 
 // ★ クローズ非表示用のフィルタ済みセッション＋ソート
 const filteredSessions = computed(() => {
-  // ベースのリスト（必要ならクローズを除外）
   let list = sessions.value;
-  if (hideClosed.value) {
-    list = list.filter((s) => s.status !== "CLOSED");
-  }
+  if (hideClosed.value) list = list.filter((s) => s.status !== "CLOSED");
 
-  // 未読あり → OPEN → CLOSED の順 ＋ 最終アクティブが新しい順
   return [...list].sort((a, b) => {
     const unreadA = (a.unread_count || 0) > 0;
     const unreadB = (b.unread_count || 0) > 0;
-
-    // 1. 未読ありを上に
-    if (unreadA !== unreadB) {
-      return unreadA ? -1 : 1;
-    }
+    if (unreadA !== unreadB) return unreadA ? -1 : 1;
 
     const openA = a.status === "OPEN";
     const openB = b.status === "OPEN";
+    if (openA !== openB) return openA ? -1 : 1;
 
-    // 2. OPEN を CLOSED より上に
-    if (openA !== openB) {
-      return openA ? -1 : 1;
-    }
-
-    // 3. 最終アクティブ時刻が新しいものを上に
     const tA = a.last_active_at ? new Date(a.last_active_at).getTime() : 0;
     const tB = b.last_active_at ? new Date(b.last_active_at).getTime() : 0;
     return tB - tA;
@@ -446,7 +470,6 @@ const fetchMessages = async (sessionId) => {
   }
 
   messages.value = await res.json();
-  // sender_type を大文字に正規化
   messages.value = messages.value.map((m) => ({
     ...m,
     sender_type: m.sender_type ? m.sender_type.toUpperCase() : m.sender_type,
@@ -473,13 +496,11 @@ const connectSocket = () => {
     isConnected.value = true;
     console.log("[admin] socket connected", socket.value.id);
 
-    // ★ 接続したらまず「operators」ルームに参加させる
     socket.value.emit("join_session", {
-      session_id: null, // ← join_session 側で None / null は無視する
+      session_id: null,
       role: "operator",
     });
 
-    // すでに選択中のセッションがあれば、そのセッション room にも join
     if (selectedSessionId.value) {
       socket.value.emit("join_session", {
         session_id: selectedSessionId.value,
@@ -494,36 +515,27 @@ const connectSocket = () => {
   });
 
   socket.value.on("new_message", async (msg) => {
-    // sender_type を大文字に正規化
-    if (msg.sender_type) {
-      msg.sender_type = msg.sender_type.toUpperCase();
-    }
+    if (msg.sender_type) msg.sender_type = msg.sender_type.toUpperCase();
 
-    // --- セッションリスト側の更新 ---
     if (msg.sender_type === "VISITOR") {
       const target = sessions.value.find((s) => s.id === msg.session_id);
 
       if (target) {
-        if (target.status === "CLOSED") {
-          target.status = "OPEN";
-        }
+        if (target.status === "CLOSED") target.status = "OPEN";
         if (msg.session_id !== selectedSessionId.value) {
           target.unread_count = (target.unread_count || 0) + 1;
         }
         target.last_active_at = msg.created_at || new Date().toISOString();
       } else {
-        // ★ セッションがまだ一覧にない（= 新規セッション）ので取り直す
         await fetchSessions();
       }
     }
 
-    // --- 右側チャット画面の更新 ---
     if (msg.session_id === selectedSessionId.value) {
       await fetchMessages(selectedSessionId.value);
     }
   });
 
-  // session_created リスナーはあってもいいけど、上の修正だけでも動くはず
   socket.value.on("session_created", async ({ session_id }) => {
     console.log("[admin] new session detected:", session_id);
     await fetchSessions();
@@ -537,31 +549,19 @@ watch(selectedSessionId, async (newId) => {
 
   await fetchMessages(newId);
 
-  // このセッションは開いたので未読を 0 にする
   const target = sessions.value.find((s) => s.id === newId);
-  if (target) {
-    target.unread_count = 0;
-  }
+  if (target) target.unread_count = 0;
 
   if (socket.value && isConnected.value) {
-    socket.value.emit("join_session", {
-      session_id: newId,
-      role: "operator",
-    });
+    socket.value.emit("join_session", { session_id: newId, role: "operator" });
   }
 });
 
 // ---- メッセージ送信（オペレーター側） ----
 const sendMessage = () => {
   const text = inputText.value.trim();
-  if (
-    !text ||
-    !socket.value ||
-    !isConnected.value ||
-    !selectedSessionId.value
-  ) {
+  if (!text || !socket.value || !isConnected.value || !selectedSessionId.value)
     return;
-  }
 
   socket.value.emit("operator_message", {
     session_id: selectedSessionId.value,
@@ -574,6 +574,7 @@ const sendMessage = () => {
 // ---- ログアウト ----
 const logout = () => {
   localStorage.removeItem("admin_token");
+  closeMenu();
   router.push("/admin/login");
 };
 
@@ -585,6 +586,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener("click", onDocClick);
   if (socket.value) socket.value.disconnect();
 });
 
@@ -594,16 +596,12 @@ const closeSession = async (sessionId) => {
 
   const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/close`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+    headers: { Authorization: `Bearer ${token}` },
   });
 
   if (res.ok) {
-    // 画面を更新
     fetchSessions();
 
-    // 今見ていたセッションなら detail も閉じる
     if (sessionId === selectedSessionId.value) {
       selectedSessionId.value = null;
       messages.value = [];
@@ -614,7 +612,6 @@ const closeSession = async (sessionId) => {
 };
 
 const displaySessionTitle = (s) => {
-  // セッションIDの先頭4文字だけを表示
   const shortId = s.id ? s.id.slice(0, 4) : "----";
   return shortId;
 };
@@ -646,18 +643,67 @@ const displaySessionTitle = (s) => {
   font-weight: 600;
 }
 
-.logout-btn {
-  background: #ef5350;
-  border: none;
-  padding: 6px 12px;
-  color: #fff;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 13px;
+/* ★ まとめメニュー */
+.header-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.logout-btn:hover {
-  background: #e53935;
+.menu-btn {
+  border: none;
+  border-radius: 999px;
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
+  font-weight: 900;
+  background: #e2e8f0;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 180px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  padding: 8px;
+  z-index: 1000;
+}
+
+.menu-item {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 10px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: #f1f5f9;
+}
+
+.menu-sep {
+  height: 1px;
+  background: #e2e8f0;
+  margin: 6px 0;
+}
+
+.menu-item.danger {
+  color: #b91c1c;
+}
+.menu-item.danger:hover {
+  background: #fff1f2;
 }
 
 /* 2カラム */
@@ -720,6 +766,7 @@ const displaySessionTitle = (s) => {
   background: #f1f5f9;
   margin-bottom: 8px;
   transition: background 0.15s ease, transform 0.1s ease;
+  position: relative;
 }
 
 .session-item:hover {
@@ -1005,16 +1052,6 @@ const displaySessionTitle = (s) => {
   transform: translateY(4px) scale(0.98);
 }
 
-.session-item {
-  padding: 10px 12px;
-  border-radius: 10px;
-  cursor: pointer;
-  background: #f1f5f9;
-  margin-bottom: 8px;
-  transition: background 0.15s ease, transform 0.1s ease;
-  position: relative;
-}
-
 .session-item__unread-dot {
   display: inline-block;
   width: 9px;
@@ -1041,10 +1078,6 @@ const displaySessionTitle = (s) => {
   background: #3b82f6;
 }
 
-.chat-image {
-  max-width: 200px;
-  border-radius: 8px;
-}
 .msg__image-wrapper {
   max-width: 70%;
   cursor: pointer;
@@ -1086,7 +1119,7 @@ const displaySessionTitle = (s) => {
 /* 内側コンテナ（少し余白を持たせる） */
 .image-preview__inner {
   position: relative;
-  max-width: 80%; /* 90% → 80% にして少し小さく */
+  max-width: 80%;
   max-height: 80%;
 }
 
@@ -1101,7 +1134,7 @@ const displaySessionTitle = (s) => {
 /* 閉じるボタン */
 .image-preview__close {
   position: absolute;
-  top: 8px; /* -12px → 8px にして中に入れる */
+  top: 8px;
   right: 8px;
   width: 28px;
   height: 28px;
