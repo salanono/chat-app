@@ -148,7 +148,10 @@ docker compose up --build
 
 ### 3. 初期 DB セットアップ
 
-docker compose exec backend python /app/scripts/init_db.py
+```bash
+cd backend
+docker compose exec backend sh -lc "python -m app.scripts.init_db"
+```
 
 ### 4. 管理画面へアクセス
 
