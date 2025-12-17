@@ -13,3 +13,8 @@ pgdata/
 
 # Mac
 .DS_Store
+
+# Ignore uploaded files
+backend/uploads/*
+# Keep directory
+!backend/uploads/.gitkeep
