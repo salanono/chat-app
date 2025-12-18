@@ -13,7 +13,7 @@ from .db import AsyncSessionLocal
 from . import models
 
 # ==== JWT 設定 ====
-SECRET_KEY = "CHANGE_ME_TO_SOMETHING_SECURE"  # 本番では環境変数などで
+SECRET_KEY = "CHANGE_ME_TO_SOMETHING_SECURE" 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
@@ -86,7 +86,7 @@ async def ensure_default_admin():
         if not company:
             company = models.Company(name="Default Company")
             db.add(company)
-            await db.flush()  # company.id を確定させる
+            await db.flush()
 
         result_user = await db.execute(
             select(models.User).where(models.User.email == "admin@example.com")

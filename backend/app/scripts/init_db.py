@@ -10,12 +10,10 @@ ADMIN_PASSWORD = "password"
 COMPANY_NAME = "Demo Company"
 
 async def main():
-    # 1) create tables
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
     print("✅ DB tables created")
 
-    # 2) seed data
     async with AsyncSessionLocal() as db:
         res = await db.execute(select(models.Company).where(models.Company.name == COMPANY_NAME))
         company = res.scalar_one_or_none()
